@@ -1,0 +1,4 @@
+name = "QGTestbed"
+uuid = "56dfe223-75fe-4787-9176-14535bf19f60"
+authors = ["Kai Rasmus Keller"]
+version = "0.1.0"
