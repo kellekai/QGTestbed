@@ -57,8 +57,10 @@ julia setup.jl plotting     # optional: separate plotting environment in ./plott
 - The model environment contains no plotting packages, so compute nodes never compile them.
 - On a cluster, run `setup.jl` on a login node **with the same Julia module the batch jobs use**,
   so packages are compiled once and jobs don't compile in parallel.
-- `Project.toml` is shipped without dependencies; `setup.jl` adds them. Don't run a partial
-  `Pkg.add` instead (see Troubleshooting).
+- The package is shipped **without `Project.toml`**: `setup.jl` creates it and adds the dependencies.
+  Unpacking an updated version over an existing folder therefore never touches the installed
+  environment. **After every update, run `julia setup.jl` again** on the login node: it recompiles
+  QGTestbed once, before any batch job does. Don't run a partial `Pkg.add` instead (see Troubleshooting).
 
 ## 3. Check the installation (≈ 1–2 min)
 
@@ -130,7 +132,7 @@ grep -v -E 'run_member.jl 50 64 [a-z_]+ 20 5 1( |$)' coarse_jobs.txt > tmp && mv
 ```
 
 Each run writes its file only when it finishes. If the job reaches the time limit, submit it
-again: `--resume` with the job log skips completed runs. Per-run logs are in `logs/`.
+again: `--resume-failed` skips runs that completed successfully and reruns failed ones. Per-run logs are in `logs/`.
 
 To run a single case: `julia --project=. scripts/run_member.jl 50 64 reynolds 20 5 1`.
 
@@ -148,10 +150,11 @@ To run a single case: `julia --project=. scripts/run_member.jl 50 64 reynolds 20
 | `k`, `ke_spectrum_mean` | KE spectrum per layer, time mean after spin-up |
 | `pv_flux_mean` | resolved meridional PV flux per layer, time mean after spin-up |
 | `vorticity_upper`, `vorticity_times` | upper-layer relative vorticity every 30 days from t = 0 (Float32) |
+| `psi_lower` | lower-layer streamfunction at the same times (Float32; runs started after it was added) |
 | `snapshots`, `snaptimes` | full PV fields every 30 days after spin-up (truth runs only) |
 | `q_final` | final PV field |
 
-Sizes: a few MB for coarse runs, about 250 MB for 512² truth runs.
+Sizes: a few MB for coarse runs, about 500 MB for 512² truth runs (vorticity and lower-layer streamfunction snapshots).
 
 ---
 
@@ -172,9 +175,22 @@ All plotting uses the separate environment: `julia --project=plotting …` (run 
    ```bash
    julia --project=plotting scripts/plot_vorticity.jl 50 64              # times chosen automatically
    julia --project=plotting scripts/plot_vorticity.jl 50 64 0.5 1 2 5    # times in years
+   julia --project=plotting scripts/plot_vorticity.jl 50 64 -d output/tuned -t output -o figures   # folders
    ```
-   Writes `output/vorticity_50N_nx64.png`. Columns: truth (coarse-grained to the same grid)
+   Writes `output/vorticity_50N_nx64.png` (`-d` run folder, `-t` truth folder, `-o` figure folder). Columns: truth (coarse-grained to the same grid)
    and each closure; rows: times; one colour scale per row from the truth.
+2b. **Mean flow and eddies** (as Jansen et al. 2019, Fig. 3):
+   ```bash
+   julia --project=plotting scripts/plot_circulation.jl 40 64          # snapshot = last saved time
+   julia --project=plotting scripts/plot_circulation.jl 40 64 12.5     # snapshot at 12.5 years
+   ```
+   Writes `output/circulation_40N_nx64.png`. Contours: sea surface height η = f₀ψ₁/g (the QG
+   upper-layer streamfunction, imposed flow included; black > 0, white < 0). Shading: magnitude of the
+   vertically integrated transport |H₁u₁ + H₂u₂| on a log scale. Row (a) is the time mean after the
+   spin-up, row (b) a snapshot of the deviations from it; columns are the truth (coarse-grained) and each
+   closure. In this doubly periodic testbed the mean is mostly the imposed flow, so row (b) is the
+   informative one. The transport needs the lower-layer streamfunction (`psi_lower`), saved by runs
+   started after this change; for older runs the shading falls back to the upper-layer speed |u₁|.
 3. **KE spectra:** compare each closure with the truth spectrum at the same latitude, left of the
    dotted cutoff line in the `plot_summary.jl` figure (the scales the coarse grid resolves).
 4. **PV fluxes.** For GM-type closures (`nemo`, `geometric*`, `meke`) compare
@@ -187,10 +203,13 @@ All plotting uses the separate environment: `julia --project=plotting …` (run 
    Prints correlation and relative RMSE between modelled and true subgrid PV forcing, and both
    energy transfers.
 6. **Across latitudes (scale awareness).** Reduce every coarse run to three numbers relative to the
-   truth at the same latitude and plot them against Δx/Ld:
+   truth at the same latitude and plot them against the resolution parameter Ld/Δx (grid points per
+   deformation radius, Hallberg 2013), shaded as unresolved (< 1), gray zone (1–2) and resolved (> 2):
    ```bash
    julia --project=plotting scripts/scale_awareness.jl              # all runs in output/
    julia --project=plotting scripts/scale_awareness.jl -s 5 -d output
+   julia --project=plotting scripts/scale_awareness.jl -d output/tuned -t output   # tuned sweep (7c)
+   julia --project=plotting scripts/scale_awareness.jl -g 64                       # only the 64² grid
    ```
    - spectral error: RMS of log₁₀(E_model/E_truth) for 0 < k ≤ k_c/2 (k_c = dealiasing cutoff);
      0 is perfect, 1 means a factor 10 off on average, capped at 6 (eddies gone);
@@ -198,10 +217,43 @@ All plotting uses the separate environment: `julia --project=plotting …` (run 
    - PV flux: (resolved + parametrized upper-layer ⟨vq⟩) / truth ⟨vq⟩, minus 1.
 
    Writes `output/scale_awareness.csv` (one row per latitude, grid and closure, mean and range over
-   seeds) and one figure per metric, each with one row per grid (32², 64², 128²) and the same Δx/Ld
-   axis in every row (colours = closures): `output/scale_awareness_spectral_error.png`,
+   seeds) and one figure per metric, each with one row per grid (32², 64², 128²), an Ld/Δx axis fitted to
+   each grid and the latitudes on a second axis on top (colours = closures): `output/scale_awareness_spectral_error.png`,
    `output/scale_awareness_resolved_KE.png`, `output/scale_awareness_PV_flux.png`. A scale-aware
-   closure stays near 0 across the whole Δx/Ld range; a non-scale-aware one drifts with Δx/Ld.
+   closure stays near 0 across the whole Ld/Δx range; a non-scale-aware one drifts with Ld/Δx.
+7. **MEKE energy budget** (Jansen 2019 closure): what sets the subgrid eddy energy e, and with it
+   K_GM and the backscatter. Needs `meke` runs made with the current code.
+   ```bash
+   julia --project=plotting scripts/meke_budget.jl output/40N_nx64_meke_seed1.jld2 output/60N_nx64_meke_seed1.jld2
+   julia --project=plotting scripts/meke_budget.jl output/*N_nx64_meke_seed1.jld2 -t output -o output/meke_budget_nx64.png
+   ```
+   Prints per run the time means after the spin-up of e, √(2e), L_mix, R and K_GM (with the truth's
+   κ_eff = −⟨v₁q₁⟩/(F₁ΔU) from the `-t` folder for comparison), the four budget terms of ∂e/∂t
+   (GM PE release and biharmonic dissipation as sources, backscatter and drag as sinks) with their
+   share of the source, and the drag damping time, including the part set by U_bg alone. The figure
+   shows the terms against time. The run files store these terms as `meke_src_GM`,
+   `meke_src_biharm`, `meke_sink_bs`, `meke_sink_drag`, `meke_net`, `meke_drag_rate`,
+   `meke_drag_rate_Ubg` and `meke_Lmix` in `timeseries`.
+
+8. **Validation against Perezhogin & Glazunov (2023), Fig. 8.** The 49°N member is the pyqg
+   "eddy" configuration (Ross et al. 2023). One batch job runs the truth on 256², 64² without closure
+   and 64² with the Reynolds backscatter at the published C_R = 7 (10 years, 5 seeds each), then
+   computes the KE spectrum, the resolved KE and APE transfers and the subgrid energy transfer (closure,
+   and the exact subgrid forcing of the coarse-grained truth with a Gaussian and a sharp filter), and
+   draws them in the layout of their Fig. 8:
+   ```bash
+   sbatch scripts/perezhogin_validation.sh            # from the QGTestbed root folder
+   ```
+   Settings (latitude, grids, C_R, years, seeds) are at the top of the script. Runs, logs,
+   `spectra.jld2` and `perezhogin_validation.png` go to `perezhogin-validation/`. The two analysis
+   steps can be repeated on their own:
+   ```bash
+   julia --project=. scripts/perezhogin_validation_spectra.jl perezhogin-validation 64
+   julia --project=plotting scripts/plot_perezhogin_validation.jl perezhogin-validation
+   ```
+   The paper's JansenHeld run is not included. Spectra are normalized so that their sum times dk is the
+   domain mean, with k the angular wavenumber; if pyqg normalizes differently, absolute values can
+   differ from the paper by a constant factor while shapes and ratios stay comparable.
 
 ---
 
@@ -265,8 +317,18 @@ This gives 152 runs (reynolds 24, nemo 60, geometric 48, meke 20). Options of `t
 sbatch scripts/slurm/tune.sh                     # reads tune_jobs.txt
 ```
 
+**More seeds.** `scripts/slurm/tune_seeds.sh` writes its own job list and runs it, with everything set
+by environment variables. Runs go to the same `output/tune/<closure>/` folder, so existing seeds are
+reused; e.g. add seeds 2 and 3 to a seed-1 experiment:
+```bash
+CLOSURE=reynolds PARAMS="C_R=0,1,3,7,15,30" CASES=40:64,60:64 SEEDS=2,3 sbatch scripts/slurm/tune_seeds.sh
+CLOSURE=geometric PARAMS="alpha=0.02,0.04,0.06,0.1 lambda_days=20,80,320" SEEDS=1,2,3 sbatch scripts/slurm/tune_seeds.sh
+```
+`tune_evaluate.jl` averages the cost over all seeds it finds. Defaults: `CASES=40:64,60:64`,
+`SEEDS=1,2,3`, `YEARS=10`, `SPINUP=3`.
+
 GNU parallel, 100 runs at a time, single-threaded. Resubmit if the job reaches its time limit:
-completed runs are skipped. Per-run logs are in `logs/tune/`.
+successful runs are skipped, failed ones are rerun. Per-run logs are in `logs/tune/`.
 
 ### Step 3 — score and pick the best set
 
@@ -280,7 +342,9 @@ For each closure this prints the five best parameter sets (mean cost over cases 
 cost of the published setting, and writes into `output/tune/<closure>/`:
 - `tune_results.csv`: every parameter set ranked, with cost and the three metrics per case and as mean;
 - `tune_cost.png`: cost against the parameter (one parameter, one line per case, dashed = published)
-  or a cost map (two parameters, star = best).
+  or a cost map (two parameters). A large gold star marks the best set (mean over cases), small stars
+  the optimum of each case; a box beside the plot lists the best values, their cost per case next to the
+  published setting, and each case's own optimum.
 
 Cost = w₁·spectral error + w₂·|resolved KE error| + w₃·|PV-flux error|, default weights 1,1,1.
 Change the balance with `--weights`, e.g. `--weights 1,1,0` to ignore the PV flux. Other options:
@@ -326,6 +390,42 @@ next to the cost of the published setting at the same case.
   closures doesn't hinge on them (e.g. repeat with `--weights 1,1,0` and `--weights 0,0,1`).
 - `nemo`, `geometric` and `geometric_nosplit` include NEMO's bilaplacian viscosity (`Uv`); tuning `Uv`
   changes the dissipation package, not the eddy closure itself.
+
+## 7c. Repeating the sweep with the tuned parameters
+
+`scripts/slurm/tuned_sweep.sh` reruns the whole coarse sweep with the best values from Section 7b.
+Edit the settings block at the top of the script, one line per closure:
+
+```bash
+NEMO_PARAMS="Uv=0.1 Ue=0.02"
+GEOMETRIC_PARAMS="alpha=0.06 lambda_days=80"
+GEOMETRIC_NOSPLIT_PARAMS="alpha=0.06 lambda_days=80"
+MEKE_PARAMS="c=0.15"
+REYNOLDS_PARAMS="C_R=3"
+
+CLOSURES="none nemo geometric geometric_nosplit meke reynolds"
+LATS="20 30 40 50 60 70";  GRIDS="32 64 128";  SEEDS="1 2 3";  YEARS=20;  SPINUP=5
+OUTDIR=output/tuned
+```
+
+Parameters not listed keep their published values; an empty string runs the closure as published;
+remove a closure from `CLOSURES` to skip it (`none` is included as the reference). Then:
+
+```bash
+sbatch scripts/slurm/tuned_sweep.sh
+```
+
+The script checks the parameter names before starting, records the settings in
+`output/tuned/tuned_settings.txt` (they are also stored in every output file as `metadata`), and runs
+the sweep with GNU parallel (resubmit to finish an interrupted sweep). The files have the same names
+as in `output/`, which stays untouched. Compare with the truth runs in `output/`:
+
+```bash
+julia --project=plotting scripts/scale_awareness.jl -d output/tuned -t output
+```
+
+This writes the scale-awareness table and figures into `output/tuned/`; put them next to the
+as-published ones in `output/` to see what tuning changed at each Δx/Ld.
 
 ## 8. How each closure is implemented (2-layer translation)
 
@@ -378,7 +478,7 @@ Choices where a paper leaves something open or the 2-layer translation needs one
 ## 9. Repository layout
 
 ```
-setup.jl                      install model (and plotting) environments
+setup.jl                      create Project.toml, install model (and plotting) environments, precompile
 src/cases.jl                  latitude-dependent parameters
 src/problem.jl                MultiLayerQG problem + closure hook
 src/closures/*.jl             the closures
@@ -391,14 +491,22 @@ scripts/sweep.jl              writes the full job list
 scripts/apriori.jl            offline skill on truth snapshots
 scripts/plot_vorticity.jl     vorticity comparison panels
 scripts/plot_summary.jl       energy time series and KE spectra
-scripts/scale_awareness.jl    metrics of every run vs truth, plotted against Δx/Ld
+scripts/plot_circulation.jl   mean flow and eddies: SSH contours, transport shading (Jansen et al. Fig. 3)
+scripts/scale_awareness.jl    metrics of every run vs truth, plotted against Ld/Δx
+scripts/meke_budget.jl        energy budget of the MEKE closure (what sets K_GM)
+scripts/perezhogin_validation.sh         Slurm job: Perezhogin & Glazunov (2023) Fig. 8 validation at 49°N
+scripts/perezhogin_validation_run.jl     one run of that validation (truth / none / reynolds)
+scripts/perezhogin_validation_spectra.jl its spectra and energy transfers (model environment)
+scripts/plot_perezhogin_validation.jl    its figure (plotting environment)
 scripts/plotting_utils.jl     shared spectrum helpers for the plotting scripts
 scripts/slurm/truth.sh        Slurm job: truth runs
 scripts/slurm/truth_and_50N.sh  Slurm job: truth runs + 50°N 64² closure runs
 scripts/slurm/coarse.sh       Slurm job: coarse runs
 scripts/slurm/tune.sh         Slurm job: tuning runs
+scripts/slurm/tune_seeds.sh   Slurm job: tuning runs with several seeds (writes its own job list)
+scripts/slurm/tuned_sweep.sh  Slurm job: full sweep with the tuned parameters (settings block at the top)
 scripts/tune_plan.jl          tuning: write the job list for a parameter grid
-scripts/tune_member.jl        tuning: one run with given parameters
+scripts/tune_member.jl        one run with given closure parameters (tuning and tuned sweep)
 scripts/tune_evaluate.jl      tuning: score against the truth, rank, plot
 scripts/tune_params.jl        tuning: tunable parameter names per closure
 ```
@@ -409,9 +517,11 @@ scripts/tune_params.jl        tuning: tunable parameter names per closure
 
 | message | cause | fix |
 |---|---|---|
-| `Package QGTestbed does not have LinearAlgebra in its dependencies` | environment created without `setup.jl` | `rm Manifest.toml`, restore `Project.toml` to name/uuid/authors/version only, run `julia setup.jl` |
+| `Package QGTestbed does not have LinearAlgebra in its dependencies` | `Project.toml` lost its dependencies (environment created without `setup.jl`, or overwritten by an older package version that shipped a bare `Project.toml`) | `rm Project.toml Manifest.toml`, then `julia setup.jl` on the login node |
+| `QGTestbed Being precompiled by another process` in many job logs | jobs started before QGTestbed was compiled | run `julia setup.jl` on the login node before submitting (the batch scripts now also compile once before starting the runs) |
 | `Package JLD2 not found in current path` when plotting | plotting script run outside the plotting environment | `julia setup.jl plotting`, then `julia --project=plotting …` from this folder |
 | `Circular dependency detected` / `Failed to precompile Makie` | Makie cannot be precompiled with Julia 1.11.0 (extension cycle) | the plotting environment uses Plots.jl instead; if an old `plotting/` folder with Makie exists, delete it and run `julia setup.jl plotting` again |
+| batch job ends immediately without output | the GNU parallel job log (`coarse_joblog.txt`, `tune_jobs_joblog.txt`) lists all jobs from an earlier attempt; with `--resume` they are all skipped | delete the job log and resubmit (the scripts now use `--resume-failed`, which reruns failed jobs) |
 | `Assignment to prob in soft scope is ambiguous` | Julia scoping warning in scripts | harmless |
 | runs much slower than expected | FFTs planned for all cores of the node | set `JULIA_CPU_THREADS` equal to `-t` (Section 4) |
 
@@ -421,8 +531,9 @@ scripts/tune_params.jl        tuning: tunable parameter names per closure
 
 All scripts are in `scripts/slurm/` and are submitted from the `QGTestbed` folder with `sbatch`.
 Before the first use, replace `<your_account>` and `<your_qos>`, and check that `module load julia` loads the
-same Julia version that was used for `julia setup.jl`. Runs started with `&` inside a script must be followed by
-`wait`, otherwise the job ends immediately and Slurm stops the runs.
+same Julia version that was used for `julia setup.jl`. Each script first loads QGTestbed once (so the runs don't
+all compile it at the same time) and stops with a message if the environment is broken. Runs started with `&`
+inside a script must be followed by `wait`, otherwise the job ends immediately and Slurm stops the runs.
 
 ### Truth runs (Section 4): `scripts/slurm/truth.sh`
 
@@ -440,6 +551,9 @@ same Julia version that was used for `julia setup.jl`. Runs started with `&` ins
 #SBATCH --output=truth_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
 
 SEED=${SEED:-1}
 YEARS=${YEARS:-20}
@@ -478,6 +592,9 @@ wait
 #SBATCH --output=truth50_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
 mkdir -p logs
 
 # 512² truth runs: 16 threads each (48 cores)
@@ -504,7 +621,7 @@ wait    # keep the job alive until every run above has finished
 # Create the job list first, then submit from the QGTestbed folder:
 #   julia --project=. scripts/sweep.jl | grep -v truth | sed 's/^/JULIA_CPU_THREADS=1 /' > coarse_jobs.txt
 #   sbatch scripts/slurm/coarse.sh
-# If the job hits the time limit, submit it again: --resume skips finished runs.
+# If the job hits the time limit, submit it again: --resume-failed skips successful runs and reruns failed ones.
 #SBATCH --job-name=qg_coarse
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -516,10 +633,13 @@ wait    # keep the job alive until every run above has finished
 
 module load julia                  # the same Julia module used for `julia setup.jl`
 module load parallel 2>/dev/null   # GNU parallel, if not on the default path
+
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
 export JULIA_NUM_THREADS=1
 
 mkdir -p logs
-parallel -j 100 --joblog coarse_joblog.txt --resume --results logs/ < coarse_jobs.txt
+parallel -j 100 --joblog coarse_joblog.txt --resume-failed --results logs/ < coarse_jobs.txt
 ```
 
 ### Tuning runs (Section 7b): `scripts/slurm/tune.sh`
@@ -529,7 +649,7 @@ parallel -j 100 --joblog coarse_joblog.txt --resume --results logs/ < coarse_job
 # Tuning runs from a job list written by scripts/tune_plan.jl, single-threaded, 100 at a time.
 #   julia scripts/tune_plan.jl --closure reynolds --param C_R=1,3,7,15,30 --cases 40:64,50:64 > tune_jobs.txt
 #   sbatch scripts/slurm/tune.sh                 # or: JOBS=other_list.txt sbatch scripts/slurm/tune.sh
-# Resubmit to finish interrupted lists: --resume skips completed runs.
+# Resubmit to finish interrupted lists: --resume-failed skips successful runs and reruns failed ones.
 #SBATCH --job-name=qg_tune
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -541,11 +661,165 @@ parallel -j 100 --joblog coarse_joblog.txt --resume --results logs/ < coarse_job
 
 module load julia                  # the same Julia module used for `julia setup.jl`
 module load parallel 2>/dev/null
+
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
 export JULIA_NUM_THREADS=1
 
 JOBS=${JOBS:-tune_jobs.txt}
 mkdir -p logs/tune
-parallel -j 100 --joblog ${JOBS%.txt}_joblog.txt --resume --results logs/tune/ < "$JOBS"
+parallel -j 100 --joblog ${JOBS%.txt}_joblog.txt --resume-failed --results logs/tune/ < "$JOBS"
+```
+
+### Tuning runs with several seeds (Section 7b): `scripts/slurm/tune_seeds.sh`
+
+```bash
+#!/bin/bash
+# Tuning runs with several seeds: writes its own job list with scripts/tune_plan.jl and runs it.
+# All settings come from environment variables, so no job list has to be prepared beforehand.
+#
+#   CLOSURE=reynolds PARAMS="C_R=0,1,3,7,15,30" CASES=40:64,60:64 SEEDS=2,3 \
+#       sbatch scripts/slurm/tune_seeds.sh
+#
+#   CLOSURE=geometric PARAMS="alpha=0.02,0.04,0.06,0.1 lambda_days=20,80,320" \
+#       CASES=40:64,60:64 SEEDS=1,2,3 sbatch scripts/slurm/tune_seeds.sh
+#
+#   CLOSURE   closure to tune (nemo | geometric | geometric_nosplit | meke | reynolds)   [required]
+#   PARAMS    space-separated NAME=v1,v2,… (one per parameter, all combinations run)    [required]
+#   CASES     latitude:grid pairs                                         (default 40:64,60:64)
+#   SEEDS     seeds to run                                                (default 1,2,3)
+#   YEARS     run length in years                                         (default 10)
+#   SPINUP    spin-up excluded from the scores                            (default 3)
+#
+# Runs go to output/tune/<closure>/ like the single-seed tuning, so seeds already run there
+# (e.g. seed 1 from scripts/slurm/tune.sh) are reused: set SEEDS=2,3 to add only new seeds.
+# tune_evaluate.jl averages the cost over all seeds it finds.
+# Resubmit with the same settings to finish an interrupted list (--resume-failed).
+#SBATCH --job-name=qg_tune_seeds
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=112
+#SBATCH --time=48:00:00
+#SBATCH --account=<your_account>
+#SBATCH --qos=<your_qos>
+#SBATCH --output=tune_seeds_%j.out
+
+module load julia                  # the same Julia module used for `julia setup.jl`
+module load parallel 2>/dev/null
+
+: "${CLOSURE:?set CLOSURE, e.g. CLOSURE=reynolds}"
+: "${PARAMS:?set PARAMS, e.g. PARAMS=\"C_R=0,1,3,7,15,30\"}"
+CASES=${CASES:-40:64,60:64}
+SEEDS=${SEEDS:-1,2,3}
+YEARS=${YEARS:-10}
+SPINUP=${SPINUP:-3}
+
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
+export JULIA_NUM_THREADS=1
+
+# Job list for these settings (one file per closure and seed set)
+JOBS=tune_${CLOSURE}_seeds_${SEEDS//,/-}.txt
+PARAM_ARGS=()
+for p in $PARAMS; do PARAM_ARGS+=(--param "$p"); done
+julia scripts/tune_plan.jl --closure "$CLOSURE" "${PARAM_ARGS[@]}" --cases "$CASES" \
+      --seeds "$SEEDS" --years "$YEARS" --spinup "$SPINUP" > "$JOBS" || { echo "tune_plan.jl failed"; exit 1; }
+echo "$(wc -l < "$JOBS") runs in $JOBS"
+
+mkdir -p logs/tune
+parallel -j 100 --joblog ${JOBS%.txt}_joblog.txt --resume-failed --results logs/tune/ < "$JOBS"
+```
+
+### Sweep with tuned parameters (Section 7c): `scripts/slurm/tuned_sweep.sh`
+
+```bash
+#!/bin/bash
+# Repeat the coarse sweep with tuned closure parameters.
+# Edit the settings block below (best values from tune_evaluate.jl), then submit from the
+# QGTestbed folder:   sbatch scripts/slurm/tuned_sweep.sh
+#
+# Runs go to $OUTDIR (default output/tuned/) with the same file names as the as-published
+# sweep in output/, which stays untouched. The parameter values are stored in every file
+# (`metadata`) and in $OUTDIR/tuned_settings.txt. Compare with the truth runs in output/:
+#   julia --project=plotting scripts/scale_awareness.jl -d output/tuned -t output
+# Resubmit with the same settings to finish an interrupted sweep (--resume-failed).
+#SBATCH --job-name=qg_tuned_sweep
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=112
+#SBATCH --time=48:00:00
+#SBATCH --account=<your_account>
+#SBATCH --qos=<your_qos>
+#SBATCH --output=tuned_sweep_%j.out
+
+# ============================ settings ==========================================
+# Best parameter values per closure, space-separated NAME=value (names as in tune_plan.jl:
+#   nemo: Uv Ue Le_km | geometric(_nosplit): alpha lambda_days etaE E0 L_split_km Uv
+#   meke: c c_smag tau_vis_days c_d U_bg | reynolds: C_R FGR).
+# Parameters not listed keep their published values. An empty string runs the closure
+# with its published values; remove a closure from CLOSURES to skip it.
+NEMO_PARAMS="Uv=0.1 Ue=0.02"
+GEOMETRIC_PARAMS="alpha=0.06 lambda_days=80"
+GEOMETRIC_NOSPLIT_PARAMS="alpha=0.06 lambda_days=80"
+MEKE_PARAMS="c=0.15"
+REYNOLDS_PARAMS="C_R=3"
+
+CLOSURES="none nemo geometric geometric_nosplit meke reynolds"   # `none` = reference without closure
+LATS="20 30 40 50 60 70"
+GRIDS="32 64 128"
+SEEDS="1 2 3"
+YEARS=20
+SPINUP=5
+OUTDIR=output/tuned
+NPAR=100                                                          # runs at a time
+# ================================================================================
+
+module load julia                  # the same Julia module used for `julia setup.jl`
+module load parallel 2>/dev/null
+
+params_for() {
+    case "$1" in
+        nemo)              echo "$NEMO_PARAMS" ;;
+        geometric)         echo "$GEOMETRIC_PARAMS" ;;
+        geometric_nosplit) echo "$GEOMETRIC_NOSPLIT_PARAMS" ;;
+        meke)              echo "$MEKE_PARAMS" ;;
+        reynolds)          echo "$REYNOLDS_PARAMS" ;;
+        *)                 echo "" ;;
+    esac
+}
+
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
+export JULIA_NUM_THREADS=1
+
+# Check the parameter names before starting hundreds of runs (tune_plan.jl validates them)
+for cl in $CLOSURES; do
+    P=$(params_for $cl)
+    [ -z "$P" ] && continue
+    ARGS=(); for p in $P; do ARGS+=(--param "$p"); done
+    julia scripts/tune_plan.jl --closure $cl "${ARGS[@]}" > /dev/null 2>&1 \
+        || { echo "invalid parameters for $cl: '$P' (see scripts/tune_params.jl)"; exit 1; }
+done
+
+# Record the settings and write the job list
+mkdir -p "$OUTDIR" logs/tuned
+{
+    echo "tuned sweep, $(date)"
+    for cl in $CLOSURES; do
+        P=$(params_for $cl); echo "$cl: ${P:-published values}"
+    done
+    echo "lats: $LATS | grids: $GRIDS | seeds: $SEEDS | years: $YEARS | spin-up: $SPINUP"
+} > "$OUTDIR/tuned_settings.txt"
+cat "$OUTDIR/tuned_settings.txt"
+
+JOBS=tuned_sweep_jobs.txt
+> "$JOBS"
+for lat in $LATS; do for nx in $GRIDS; do for seed in $SEEDS; do for cl in $CLOSURES; do
+    echo "JULIA_CPU_THREADS=1 julia -t 1 --project=. scripts/tune_member.jl $lat $nx $cl $YEARS $SPINUP $seed $OUTDIR --no-tag $(params_for $cl)" >> "$JOBS"
+done; done; done; done
+echo "$(wc -l < "$JOBS") runs in $JOBS"
+
+parallel -j $NPAR --joblog tuned_sweep_joblog.txt --resume-failed --results logs/tuned/ < "$JOBS"
 ```
 
 ---

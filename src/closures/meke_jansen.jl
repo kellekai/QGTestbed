@@ -37,7 +37,20 @@ Base.@kwdef mutable struct MEKEGMBackscatter <: AbstractClosure
     bs_barotropic_only::Bool = false
     e::Any = nothing
     K::Any = nothing
+    budget::Any = nothing      # domain means of the MEKE budget terms at the last step (diagnostics)
 end
+
+# Names of the MEKE budget diagnostics (domain means, written to the time series):
+#   meke_src_GM        ė_GM   PE released by GM                       (m² s⁻³, source)
+#   meke_src_biharm    ė_ν4   energy removed by biharmonic Smagorinsky (m² s⁻³, source)
+#   meke_sink_bs       ė_ν2   energy given back by backscatter         (m² s⁻³, sink)
+#   meke_sink_drag     ė_diss bottom-drag dissipation of MEKE          (m² s⁻³, sink)
+#   meke_net           sum of the four (≈ d⟨e⟩/dt; domain-mean transport is zero)
+#   meke_drag_rate     c_d/H √(e + |u_bot|² + U_bg²)                   (s⁻¹)
+#   meke_drag_rate_Ubg c_d/H · U_bg, the part set by U_bg alone        (s⁻¹)
+#   meke_Lmix          mixing length L_mix                              (m)
+const MEKE_BUDGET_KEYS = (:meke_src_GM, :meke_src_biharm, :meke_sink_bs, :meke_sink_drag, :meke_net,
+                          :meke_drag_rate, :meke_drag_rate_Ubg, :meke_Lmix)
 
 default_stepper(::MEKEGMBackscatter) = "RK4"
 has_prognostic_state(::MEKEGMBackscatter) = true
@@ -45,6 +58,7 @@ has_prognostic_state(::MEKEGMBackscatter) = true
 function init_closure!(c::MEKEGMBackscatter, m)
     c.e = fill!(similar(m.real2), c.e_init)
     c.K = fill!(similar(m.real2), 0)
+    c.budget = NamedTuple{MEKE_BUDGET_KEYS}(ntuple(_ -> NaN, length(MEKE_BUDGET_KEYS)))
     return nothing
 end
 
@@ -99,8 +113,11 @@ function step_closure!(c::MEKEGMBackscatter, f, m, dt)
     ė_ν4  = layer_average(t.diss4, m)
     ė_ν2  = -layer_average(t.diss2, m)          # diss2 < 0 for ν₂ < 0 → ė_ν2 > 0
     ubot2 = @views @. (f.u[:, :, 2] + m.U[2])^2 + f.v[:, :, 2]^2
-    ė_diss = @. c.c_d / m.Htot * sqrt(c.e + ubot2 + c.U_bg^2) * c.e
+    drag_rate = @. c.c_d / m.Htot * sqrt(c.e + ubot2 + c.U_bg^2)
+    ė_diss = @. drag_rate * c.e
     source = @. ė_GM + ė_ν4 - ė_ν2 - ė_diss
+    c.budget = NamedTuple{MEKE_BUDGET_KEYS}((mean(ė_GM), mean(ė_ν4), mean(ė_ν2), mean(ė_diss), mean(source),
+                                             mean(drag_rate), c.c_d / m.Htot * c.U_bg, mean(meke_Lmix(c, m))))
     ubt, vbt = barotropic_velocity(f, m)
     Ke = @. c.c * sqrt(2 * c.e) * $meke_Lmix(c, m)
     tend_h = advect_diffuse(c.e, ubt, vbt, Ke, m)
@@ -115,4 +132,4 @@ function param_pv_flux(c::MEKEGMBackscatter, f, m)
 end
 
 closure_diagnostics(c::MEKEGMBackscatter, m) =
-    (MEKE = mean(c.e), kappa_gm = mean(c.K), R = meke_R(c, m))
+    merge((MEKE = mean(c.e), kappa_gm = mean(c.K), R = meke_R(c, m)), c.budget)

@@ -18,7 +18,9 @@
 #
 # Output in the tuning directory:
 #   tune_results.csv   one row per parameter set and case, plus the mean over cases, ranked
-#   tune_cost.png      cost against the parameter(s): a line for one parameter, a map for two
+#   tune_cost.png      cost against the parameter(s): a line for one parameter, a map for two;
+#                      large gold ★ = best set (mean over cases), small ★ = optimum of each case,
+#                      box on the right with the values
 ENV["GKSwstype"] = "100"
 using JLD2, Plots, Printf
 gr()
@@ -118,28 +120,71 @@ println("table: $csv")
 
 # --- plot ----------------------------------------------------------------------------
 png = joinpath(dir, "tune_cost.png")
+fmtp(p) = join(["$n = $(@sprintf("%g", x))" for (n, x) in zip(pnames, p)], ", ")
+best = ranked[1]
+# each case's own optimum
+case_best = Dict(c => argmin(p -> percase[(p, c)][1], [p for p in psets if haskey(percase, (p, c))])
+                 for c in cases)
+
+"Text box listing the best set, its cost and the per-case optima (a separate panel, so no curves are hidden)."
+function info_box()
+    lines = ["Best (mean over cases, ★)", "  " * fmtp(best),
+             @sprintf("  mean cost %.3f", overall[best]) *
+                 (length(published) == length(cases) ? @sprintf("  (published %.3f)", mean(values(published))) : ""),
+             "", "Cost of the best set per case"]
+    for c in cases
+        v = get(percase, (best, c), [NaN])[1]
+        push!(lines, @sprintf("  %d°N/%d²: %.3f", c..., v) *
+                     (haskey(published, c) ? @sprintf("  (published %.3f)", published[c]) : ""))
+    end
+    push!(lines, "", "Optimum of each case (small ★)")
+    for c in cases
+        push!(lines, @sprintf("  %d°N/%d²: ", c...) * fmtp(case_best[c]) * @sprintf("  (%.3f)", percase[(case_best[c], c)][1]))
+    end
+    box = plot(xlims = (0, 1), ylims = (0, 1), framestyle = :box, ticks = false, legend = false, grid = false)
+    for (i, l) in enumerate(lines)
+        annotate!(box, 0.04, 1 - 0.06 * i, text(l, 8, :left, i in (1, 5, 5 + length(cases) + 2) ? :black : :gray20))
+    end
+    return box
+end
+
 if length(pnames) == 1
     x = [p[1] for p in psets]
     order = sortperm(x)
     logx = all(>(0), x) && maximum(x) / minimum(x) > 20
-    fig = plot(xlabel = pnames[1], ylabel = "cost", xscale = logx ? :log10 : :identity, legend = :best,
-               title = "$closure: cost against $(pnames[1])", titlefontsize = 10, size = (800, 450))
+    ax = plot(xlabel = pnames[1], ylabel = "cost", xscale = logx ? :log10 : :identity, legend = :best,
+              title = "$closure: cost against $(pnames[1])", titlefontsize = 10)
     for (ci, c) in enumerate(cases)
         y = [get(percase, (p, c), [NaN])[1] for p in psets]
-        plot!(fig, x[order], y[order]; marker = :circle, color = ci, label = "$(c[1])°N, $(c[2])²")
-        haskey(published, c) && hline!(fig, [published[c]]; color = ci, linestyle = :dash, label = "published, $(c[1])°N")
+        plot!(ax, x[order], y[order]; marker = :circle, color = ci, label = "$(c[1])°N, $(c[2])²")
+        haskey(published, c) && hline!(ax, [published[c]]; color = ci, linestyle = :dash, label = "published, $(c[1])°N")
+        cb = case_best[c]
+        scatter!(ax, [cb[1]], [percase[(cb, c)][1]]; marker = :star5, markersize = 9, color = ci,
+                 markerstrokecolor = :black, label = "")
     end
-    plot!(fig, x[order], [overall[p] for p in psets][order]; color = :black, lw = 2, marker = :diamond, label = "mean over cases")
+    plot!(ax, x[order], [overall[p] for p in psets][order]; color = :black, lw = 2, marker = :diamond, label = "mean over cases")
+    scatter!(ax, [best[1]], [overall[best]]; marker = :star5, markersize = 15, color = :gold,
+             markerstrokecolor = :black, label = "best: " * fmtp(best))
+    fig = plot(ax, info_box(); layout = grid(1, 2, widths = [0.68, 0.32]), size = (1150, 470),
+               left_margin = 5Plots.mm, bottom_margin = 5Plots.mm)
     savefig(fig, png); @info "Saved $png"
 elseif length(pnames) == 2
     xs, ys = sort(unique(p[1] for p in psets)), sort(unique(p[2] for p in psets))
     Z = [get(overall, (x, y), NaN) for y in ys, x in xs]
-    best = ranked[1]
-    fig = heatmap(string.(xs), string.(ys), Z; xlabel = pnames[1], ylabel = pnames[2], c = :viridis,
-                  colorbar_title = "mean cost", title = "$closure: mean cost over cases (★ = best)",
-                  titlefontsize = 10, size = (800, 550))
-    scatter!(fig, [findfirst(==(best[1]), xs) - 0.5], [findfirst(==(best[2]), ys) - 0.5];
-             marker = :star5, markersize = 12, color = :white, label = "")
+    ax = heatmap(string.(xs), string.(ys), Z; xlabel = pnames[1], ylabel = pnames[2], c = :viridis,
+                 colorbar_title = "mean cost", title = "$closure: mean cost over cases (★ = best)",
+                 titlefontsize = 10)
+    pos(p) = (findfirst(==(p[1]), xs) - 0.5, findfirst(==(p[2]), ys) - 0.5)
+    for (ci, c) in enumerate(cases)
+        px, py = pos(case_best[c])
+        scatter!(ax, [px], [py]; marker = :star5, markersize = 9, color = ci, markerstrokecolor = :white,
+                 label = "optimum $(c[1])°N/$(c[2])²")
+    end
+    bx, by = pos(best)
+    scatter!(ax, [bx], [by]; marker = :star5, markersize = 15, color = :gold, markerstrokecolor = :black,
+             label = "best (mean)")
+    fig = plot(ax, info_box(); layout = grid(1, 2, widths = [0.66, 0.34]), size = (1200, 550),
+               left_margin = 5Plots.mm, bottom_margin = 5Plots.mm)
     savefig(fig, png); @info "Saved $png"
 else
     @info "More than two parameters: no plot, see $csv"

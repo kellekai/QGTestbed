@@ -1,8 +1,20 @@
 # Scale-awareness summary: every coarse run reduced to three numbers relative to
-# the truth at the same latitude, plotted against Δx/Ld.
+# the truth at the same latitude, plotted against the resolution parameter Ld/Δx
+# (grid points per deformation radius; Hallberg 2013). Shading: Ld/Δx < 1 unresolved,
+# 1–2 gray zone, > 2 resolved.
 #
 #   julia --project=plotting scripts/scale_awareness.jl            # all runs in output/
 #   julia --project=plotting scripts/scale_awareness.jl -s 5 -d output
+#   julia --project=plotting scripts/scale_awareness.jl -d output/tuned -t output   # tuned sweep
+#
+# -d DIR   folder with the coarse runs (and output folder of the table and figures)
+# -t DIR   folder with the truth runs (default: same as -d); if the -d folder has no
+#          no-closure runs ('none'), they are also taken from here as the reference
+# -s S     spin-up in years excluded from the time means (default 5)
+# -g N,…   grids to plot, e.g. -g 64 or -g 32,64 (default: all); the figure names then
+#          end in _nx64 (or _nx32-64), the CSV always contains all grids
+#
+#   julia --project=plotting scripts/scale_awareness.jl -g 64     # only the 64² grid
 #
 # Metrics (all time means after the spin-up, default 5 yr):
 #
@@ -22,7 +34,8 @@
 # truth spectrum and flux are averaged over all available truth seeds.
 #
 # Output: <dir>/scale_awareness.csv and three figures, one per metric, with one
-# row per grid (32², 64², 128²) and the same Δx/Ld axis in every row:
+# row per grid (32², 64², 128²), a linear Ld/Δx axis fitted to each grid's range (bottom)
+# and the latitude of each point on a second x-axis on top of each row:
 #   <dir>/scale_awareness_spectral_error.png
 #   <dir>/scale_awareness_resolved_KE.png
 #   <dir>/scale_awareness_PV_flux.png
@@ -32,13 +45,17 @@ gr()
 include(joinpath(@__DIR__, "plotting_utils.jl"))
 
 # --- arguments -------------------------------------------------------------------
-outdir, spinup = "output", 5.0
+outdir, spinup, truthdir, gridsel = "output", 5.0, "", Int[]
 let i = 1
     while i <= length(ARGS)
         if ARGS[i] == "-d"
             global outdir = ARGS[i+1]; i += 2
         elseif ARGS[i] == "-s"
             global spinup = parse(Float64, ARGS[i+1]); i += 2
+        elseif ARGS[i] == "-t"
+            global truthdir = ARGS[i+1]; i += 2
+        elseif ARGS[i] == "-g"
+            global gridsel = parse.(Int, split(ARGS[i+1], ",")); i += 2
         else
             error("unknown argument $(ARGS[i])")
         end
@@ -46,6 +63,7 @@ let i = 1
 end
 
 const CLOSURE_ORDER = ["none", "nemo", "geometric", "geometric_nosplit", "meke", "reynolds"]
+# Legend names come from LABELS in plotting_utils.jl.
 const MAX_DECADES = 6.0
 const PATTERN = r"^(\d+)N_nx(\d+)_(.+)_seed(\d+)\.jld2$"
 
@@ -76,13 +94,27 @@ function summarize(path, lat, nx, closure, seed)
     end
 end
 
+truthdir = isempty(truthdir) ? outdir : truthdir
 runs = RunSummary[]
-for file in sort(readdir(outdir))
-    m = match(PATTERN, file)
-    m === nothing && continue
-    lat, nx, closure, seed = parse(Int, m[1]), parse(Int, m[2]), m[3], parse(Int, m[4])
-    r = summarize(joinpath(outdir, file), lat, nx, closure, seed)
-    r === nothing || push!(runs, r)
+function read_runs!(runs, dir, keep)
+    for file in sort(readdir(dir))
+        m = match(PATTERN, file)
+        m === nothing && continue
+        lat, nx, closure, seed = parse(Int, m[1]), parse(Int, m[2]), m[3], parse(Int, m[4])
+        keep(closure) || continue
+        r = summarize(joinpath(dir, file), lat, nx, closure, seed)
+        r === nothing || push!(runs, r)
+    end
+end
+if truthdir == outdir
+    read_runs!(runs, outdir, c -> true)
+else
+    read_runs!(runs, outdir, c -> c != "truth")
+    # truth from the truth folder; the no-closure reference too if the run folder has none
+    none_here = any(r.closure == "none" for r in runs)
+    read_runs!(runs, truthdir, c -> c == "truth" || (c == "none" && !none_here))
+    none_here || any(r.closure == "none" for r in runs) &&
+        @info "no-closure runs ('none') taken from $truthdir as reference"
 end
 isempty(runs) && error("no usable run files in $outdir")
 
@@ -90,7 +122,7 @@ isempty(runs) && error("no usable run files in $outdir")
 truth = Dict{Int, NamedTuple}()
 for lat in unique(r.lat for r in runs)
     trs = [r for r in runs if r.lat == lat && r.closure == "truth"]
-    isempty(trs) && (@warn "no truth run for $(lat)°N: latitude skipped"; continue)
+    isempty(trs) && (@warn "no truth run for $(lat)°N in $truthdir: latitude skipped"; continue)
     nmin = minimum(length(r.S) for r in trs)
     truth[lat] = (k = trs[1].k[1:nmin], S = mean(r.S[1:nmin] for r in trs), vq1 = mean(r.vq1 for r in trs))
 end
@@ -125,14 +157,14 @@ end
 
 csvfile = joinpath(outdir, "scale_awareness.csv")
 open(csvfile, "w") do io
-    println(io, "lat,nx,closure,dx_over_Ld,n_seeds,spectral_error,spectral_error_min,spectral_error_max,resolved_KE_rel_error,resolved_KE_min,resolved_KE_max,PV_flux_rel_error,PV_flux_min,PV_flux_max")
+    println(io, "lat,nx,closure,Ld_over_dx,dx_over_Ld,n_seeds,spectral_error,spectral_error_min,spectral_error_max,resolved_KE_rel_error,resolved_KE_min,resolved_KE_max,PV_flux_rel_error,PV_flux_min,PV_flux_max")
     for key in sort(collect(keys(groups)))
         g = groups[key]
         r = g[1].r
         col(f) = [getfield(x.m, f) for x in g]
         s, e, q = col(:spec_err), col(:ke_ratio), col(:flux_ratio)
-        @printf(io, "%d,%d,%s,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
-                key[1], key[2], key[3], (r.L / r.nx) / r.Ld, length(g),
+        @printf(io, "%d,%d,%s,%.4f,%.4f,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                key[1], key[2], key[3], r.Ld / (r.L / r.nx), (r.L / r.nx) / r.Ld, length(g),
                 mean(s), minimum(s), maximum(s), mean(e), minimum(e), maximum(e), mean(q), minimum(q), maximum(q))
     end
 end
@@ -142,9 +174,23 @@ end
 closures = [c for c in CLOSURE_ORDER if any(k[3] == c for k in keys(groups))]
 append!(closures, sort(unique(k[3] for k in keys(groups) if !(k[3] in CLOSURE_ORDER))))
 grids = sort(unique(k[2] for k in keys(groups)))
-dxld(k) = (groups[k][1].r.L / k[2]) / groups[k][1].r.Ld
-allx = [dxld(k) for k in keys(groups)]
-xl = (minimum(allx) / 1.15, maximum(allx) * 1.15)       # same x-range in every row
+if !isempty(gridsel)
+    missing_grids = setdiff(gridsel, grids)
+    isempty(missing_grids) || error("no runs on grid(s) $(missing_grids); available: $(grids)")
+    grids = sort(gridsel)
+end
+suffix = isempty(gridsel) ? "" : "_nx" * join(grids, "-")
+"Resolution parameter Ld/Δx (grid points per deformation radius) of a group."
+ldx(k) = groups[k][1].r.Ld / (groups[k][1].r.L / k[2])
+"x-range of one row: the Ld/Δx values of that grid plus a 5 % margin on each side."
+function row_xlims(nx)
+    xs = [ldx(k) for k in keys(groups) if k[2] == nx]
+    pad = 0.05 * max(maximum(xs) - minimum(xs), 0.1 * maximum(xs))
+    return (max(0.0, minimum(xs) - pad), maximum(xs) + pad)
+end
+
+const REGIMES = [(0.0, 1.0, :red), (1.0, 2.0, :orange), (2.0, Inf, :green)]
+const REGIME_LABELS = ["Ld/Δx < 1: unresolved", "Ld/Δx 1–2: gray zone", "Ld/Δx > 2: resolved"]
 
 const METRICS = [
     (:spec_err,   "spectral error (RMS log₁₀ E/E_truth, k ≤ k_c/2)", "spectral_error"),
@@ -155,34 +201,43 @@ const METRICS = [
 for (f, title, fname) in METRICS
     rows = Plots.Plot[]
     for (ri, nx) in enumerate(grids)
-        p = plot(xscale = :log10, xlims = xl, legend = false, titlefontsize = 10, guidefontsize = 9,
-                 tickfontsize = 8, title = "$(nx)² grid", ylabel = ri == cld(length(grids), 2) ? title : "",
-                 xlabel = ri == length(grids) ? "Δx / Ld" : "")
-        hline!(p, [0.0]; color = :black, lw = 0.5)
+        xl = row_xlims(nx)
+        first_row = ri == 1
+        p = plot(xlims = xl, guidefontsize = 9, tickfontsize = 8,
+                 legend = first_row ? :topright : false, legendfontsize = 10,
+                 background_color_legend = Plots.RGBA(1, 1, 1, 0.85), foreground_color_legend = :gray,
+                 ylabel = ri == cld(length(grids), 2) ? title : "",
+                 xlabel = ri == length(grids) ? "Ld / Δx  (grid points per deformation radius)" : "",
+                 annotations = (:topleft, text("  $(nx)² grid", 10, :left)))
+        # resolution regimes (Hallberg 2013): Ld/Δx < 1 unresolved, 1–2 gray zone, > 2 resolved
+        for ((a, b, c), lab) in zip(REGIMES, REGIME_LABELS)
+            lo_, hi_ = max(a, xl[1]), min(b, xl[2])
+            lo_ < hi_ && vspan!(p, [lo_, hi_]; color = c, alpha = 0.12, lw = 0, label = first_row ? lab : "")
+        end
+        hline!(p, [0.0]; color = :black, lw = 0.5, label = "")
+        # latitudes of the points in this row: thin guide lines and a second x-axis on top
+        lk = sort(unique([(round(ldx(k); digits = 6), k[1]) for k in keys(groups) if k[2] == nx]))
+        vline!(p, first.(lk); color = :gray, lw = 0.5, alpha = 0.4, linestyle = :dot, label = "")
+        top = twiny(p)
+        plot!(top; xlims = xl, xticks = (first.(lk), ["$(l)°N" for l in last.(lk)]),
+              xlabel = ri == 1 ? "latitude" : "", yticks = false, grid = false, legend = false,
+              tickfontsize = 7, guidefontsize = 9)
         for (ci, cl) in enumerate(closures)
-            ks = sort([k for k in keys(groups) if k[3] == cl && k[2] == nx]; by = dxld)
+            ks = sort([k for k in keys(groups) if k[3] == cl && k[2] == nx]; by = ldx)
             isempty(ks) && continue
-            x = dxld.(ks)
+            x = ldx.(ks)
             y = [mean(getfield(g.m, f) for g in groups[k]) for k in ks]
             lo = [y[i] - minimum(getfield(g.m, f) for g in groups[ks[i]]) for i in eachindex(ks)]
             hi = [maximum(getfield(g.m, f) for g in groups[ks[i]]) - y[i] for i in eachindex(ks)]
-            plot!(p, x, y; yerror = (lo, hi), color = ci, marker = :circle, markersize = 4, lw = 1.5, label = "")
+            plot!(p, x, y; yerror = (lo, hi), color = ci, marker = :circle, markersize = 4, lw = 1.5,
+                  label = first_row ? closure_label(cl) : "")
         end
         push!(rows, p)
     end
-    # legend column: closures in the first row, empty space below
-    leg = plot(framestyle = :none, legend = :left, legendfontsize = 9, grid = false, showaxis = false)
-    for (ci, cl) in enumerate(closures)
-        plot!(leg, [NaN], [NaN]; color = ci, lw = 2, marker = :circle, label = cl)
-    end
-    blank = plot(framestyle = :none, grid = false, showaxis = false, legend = false)
-    panels = Plots.Plot[]
-    for (ri, p) in enumerate(rows)
-        push!(panels, p, ri == 1 ? leg : blank)
-    end
-    fig = plot(panels...; layout = grid(length(grids), 2, widths = [0.84, 0.16]),
-               size = (1100, 330 * length(grids)), left_margin = 8Plots.mm, bottom_margin = 4Plots.mm)
-    png = joinpath(outdir, "scale_awareness_$(fname).png")
+    fig = plot(rows...; layout = (length(grids), 1),
+               size = (1000, length(grids) == 1 ? 520 : 330 * length(grids)),
+               left_margin = 8Plots.mm, bottom_margin = 4Plots.mm, right_margin = 4Plots.mm)
+    png = joinpath(outdir, "scale_awareness_$(fname)$(suffix).png")
     savefig(fig, png)
     @info "Saved $png"
 end

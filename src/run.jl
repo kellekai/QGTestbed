@@ -16,8 +16,8 @@ Run one member and write `outdir/<lat>N_nx<nx>_<closure>_seed<seed>.jld2`
 containing parameters, time series (energies, closure energy rate, closure
 scalars, resolved and parametrized meridional PV flux per layer), time-mean
 KE spectra and PV fluxes after spin-up, upper-layer relative vorticity
-snapshots from t = 0 (Float32, every `vorticity_every_days`, including the
-spin-up), and (optional) full PV snapshots after spin-up for coarse-graining.
+snapshots and lower-layer streamfunction snapshots (`psi_lower`) from t = 0
+(Float32, every `vorticity_every_days`, including the spin-up), and (optional) full PV snapshots after spin-up for coarse-graining.
 `closure = :truth` is a no-closure run at the resolution chosen by
 `truth_resolution` when `nx = 0`. `tag` is appended to the file name and
 `metadata` (e.g. tuning parameters) is stored in the file as given.
@@ -65,6 +65,7 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
     nsnap = isfinite(snapshot_every_days) ? max(1, round(Int, snapshot_every_days * DAY / dt)) : typemax(Int)
     nvort = isfinite(vorticity_every_days) ? max(1, round(Int, vorticity_every_days * DAY / dt)) : typemax(Int)
     vort1 = Array{Float32, 2}[]
+    psi2 = Array{Float32, 2}[]        # lower-layer streamfunction (eddy part), same times
     vorttimes = Float64[]
 
     ts = Dict{String, Vector{Float64}}()
@@ -119,6 +120,7 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
 
         if n % nvort == 0
             push!(vort1, Float32.(Array(view(f.ζ, :, :, 1))))
+            push!(psi2, Float32.(Array(view(f.ψ, :, :, 2))))
             push!(vorttimes, prob.clock.t)
         end
 
@@ -146,7 +148,7 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
             pv_flux_mean = flux_sum ./ max(nspec_acc, 1),
             q_final = Array(layerfields(prob.sol, m).q),
             snapshots, snaptimes,
-            vorticity_upper = vort1, vorticity_times = vorttimes,
+            vorticity_upper = vort1, vorticity_times = vorttimes, psi_lower = psi2,
             metadata = Dict{String, Any}(metadata), spinup_years)
     log_line(@sprintf("[%s] saved", name))
     return file

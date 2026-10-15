@@ -13,6 +13,9 @@
 #SBATCH --output=truth50_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
 mkdir -p logs
 
 # 512² truth runs: 16 threads each (48 cores)

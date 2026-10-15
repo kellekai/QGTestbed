@@ -35,17 +35,19 @@ outfile = something(outfile, joinpath("output", "summary_" * splitext(basename(f
 
 # --- plot ------------------------------------------------------------------------
 pE = plot(xlabel = "years", ylabel = "energy [m²/s²]", yscale = :log10, legend = :bottomright,
-          legendfontsize = 6, title = "KE upper (solid), PE (dashed)", titlefontsize = 9)
+          legendfontsize = 8, title = "KE upper (solid), PE (dashed)", titlefontsize = 9)
 vline!(pE, [spinup]; color = :gray, linestyle = :dot, label = @sprintf("spin-up (%.0f yr)", spinup))
 pS = plot(xlabel = "k [rad/m]", ylabel = "upper-layer KE spectrum [m³/s²]", xscale = :log10, yscale = :log10,
-          legend = :bottomleft, legendfontsize = 6, titlefontsize = 9,
+          legend = :bottomleft, legendfontsize = 8, titlefontsize = 9,
           title = @sprintf("time mean after %.0f yr", spinup))
 
 allspec = Float64[]
+lats = Dict{Float64, Float64}()           # latitude => Ld (m)
 cutoffs = Dict{Int, Float64}()          # nx => dealiasing cutoff
 for (i, file) in enumerate(files)
     d = load(file)
-    label = @sprintf("%s %d²", d["closure"], d["nx"])
+    lats[d["params"].lat] = d["params"].Ld
+    label = @sprintf("%s %d²", closure_label(d["closure"]), d["nx"])
     ts = d["timeseries"]
     t = ts["t"] ./ YEAR
     for (key, ls, lab) in (("KE1", :solid, label), ("PE", :dash, ""))
@@ -78,6 +80,8 @@ if !isempty(allspec)                    # keep decayed runs from stretching the 
     ylims!(pS, (top * 1e-8, top * 5))
 end
 
-fig = plot(pE, pS; layout = (1, 2), size = (1100, 420), left_margin = 5Plots.mm, bottom_margin = 5Plots.mm)
+title = join([@sprintf("%.0f°N (Ld = %.1f km)", φ, Ld / 1e3) for (φ, Ld) in sort(collect(lats))], ", ")
+fig = plot(pE, pS; layout = (1, 2), size = (1100, 450), left_margin = 5Plots.mm, bottom_margin = 5Plots.mm,
+           plot_title = title, plot_titlefontsize = 12)
 savefig(fig, outfile)
 @info "Saved $outfile"

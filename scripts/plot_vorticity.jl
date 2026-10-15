@@ -3,31 +3,54 @@
 #
 #   julia --project=plotting scripts/plot_vorticity.jl 50 64              # times chosen automatically
 #   julia --project=plotting scripts/plot_vorticity.jl 50 64 0.5 1 2 5    # times in years
+#   julia --project=plotting scripts/plot_vorticity.jl 50 64 -d output/tuned -t output -o figures
+#
+# Options (anywhere after the script name):
+#   -d DIR   folder with the coarse runs (default output)
+#   -t DIR   folder with the truth runs (default: same as -d); the no-closure runs are
+#            also taken from here if the -d folder has none
+#   -o DIR   folder for the figure (default: same as -d; created if missing)
 #
 # Uses the separate plotting environment (create it once with `julia setup.jl plotting`);
 # it does not load QGTestbed, only the .jld2 output files. Plots.jl with the GR
 # backend, which runs headless on cluster nodes.
 #
-# Columns: truth (coarse-grained to the same grid), none, nemo, geometric,
-# geometric_nosplit, meke, reynolds (missing runs are skipped).
+# Columns: truth (coarse-grained to the same grid), then the closures, titled with
+# the names in LABELS (scripts/plotting_utils.jl); missing runs are skipped.
 # Rows: times. Automatic times: t* = first time the upper-layer KE of the
 # reference run (truth if present, otherwise `none`) reaches half its maximum,
 # then t* + 1 yr, t* + 3 yr and the last snapshot.
 # One colour scale per row, symmetric, set by the 99.5th percentile of |ζ/f₀|
 # of the reference panel in that row, so damped closures appear faded.
-# Output: output/vorticity_<lat>N_nx<nx>.png
+# Output: <-o DIR>/vorticity_<lat>N_nx<nx>.png
 ENV["GKSwstype"] = "100"            # GR without a display
 using JLD2, Plots, FFTW, Statistics, Printf
 gr()
 
-const YEAR = 365 * 86400.0
+include(joinpath(@__DIR__, "plotting_utils.jl"))   # YEAR, coarsegrain2d, closure_label
 const CLOSURES = ["none", "nemo", "geometric", "geometric_nosplit", "meke", "reynolds"]
 
-length(ARGS) >= 2 || error("usage: plot_vorticity.jl <lat> <nx> [times in years...]")
-lat = parse(Float64, ARGS[1])
-nx  = parse(Int, ARGS[2])
-times_requested = length(ARGS) > 2 ? parse.(Float64, ARGS[3:end]) : Float64[]
-outdir = "output"
+pos = String[]; outdir = "output"; truthdir = ""; figdir = ""
+let i = 1
+    while i <= length(ARGS)
+        a = ARGS[i]
+        if a in ("-d", "-t", "-o")
+            i < length(ARGS) || error("option $a needs a folder")
+            a == "-d" && (global outdir = ARGS[i+1])
+            a == "-t" && (global truthdir = ARGS[i+1])
+            a == "-o" && (global figdir = ARGS[i+1])
+            i += 2
+        else
+            push!(pos, a); i += 1
+        end
+    end
+end
+length(pos) >= 2 || error("usage: plot_vorticity.jl <lat> <nx> [times in years...] [-d DIR] [-t DIR] [-o DIR]")
+lat = parse(Float64, pos[1])
+nx  = parse(Int, pos[2])
+times_requested = length(pos) > 2 ? parse.(Float64, pos[3:end]) : Float64[]
+truthdir = isempty(truthdir) ? outdir : truthdir
+figdir = isempty(figdir) ? outdir : figdir
 tag = @sprintf("%02.0fN", lat)
 @info "Arguments" latitude = lat grid = nx times = (isempty(times_requested) ? "automatic" : times_requested)
 let available = sort(unique(parse(Int, m[1]) for f in readdir(outdir)
@@ -40,30 +63,17 @@ function find_truth(outdir, tag)
     return isempty(files) ? nothing : joinpath(outdir, first(files))
 end
 
-"Gaussian filter (width 2Δx_coarse) + spectral truncation, as in src/coarsegrain.jl."
-function coarsegrain2d(Z, n, L; FGR = 2.0)
-    nT = size(Z, 1)
-    nT == n && return Float64.(Z)
-    nT > n || error("cannot coarse-grain a $(nT)² field to a finer $(n)² grid")
-    Zh = rfft(Float64.(Z))
-    kr = 2π .* (0:nT÷2) ./ L
-    l  = 2π .* fftfreq(nT, nT) ./ L
-    K2 = kr .^ 2 .+ (l .^ 2)'
-    Zh .*= exp.(-K2 .* (FGR * L / n)^2 ./ 24)
-    lidx = vcat(1:n÷2, (nT - n÷2 + 1):nT)
-    B = Zh[1:n÷2+1, lidx] .* (n^2 / nT^2)
-    B[end, :] .= 0
-    B[:, n÷2 + 1] .= 0
-    return irfft(B, n)
-end
 
 # --- load ----------------------------------------------------------------------
 columns = Tuple{String, Dict{String, Any}}[]
-truthfile = find_truth(outdir, tag)
+truthfile = find_truth(truthdir, tag)
 truthfile === nothing || push!(columns, ("truth (coarse-grained)", load(truthfile)))
 for cl in CLOSURES
     file = joinpath(outdir, @sprintf("%s_nx%d_%s_seed1.jld2", tag, nx, cl))
-    isfile(file) ? push!(columns, (cl, load(file))) : @warn "missing $file, column skipped"
+    if !isfile(file) && cl == "none" && truthdir != outdir     # reference from the truth folder
+        file = joinpath(truthdir, @sprintf("%s_nx%d_%s_seed1.jld2", tag, nx, cl))
+    end
+    isfile(file) ? push!(columns, (closure_label(cl), load(file))) : @warn "missing $file, column skipped"
 end
 isempty(columns) && error("no output files for $tag at nx = $nx in $outdir")
 for (name, d) in columns
@@ -127,6 +137,7 @@ fig = plot(panels...; layout = grid(nrow, ncol + 1, widths = [fill(wpanel, ncol)
                                  lat, nx, (L / nx) / pp.Ld),
            plot_titlefontsize = 11)
 
-file = joinpath(outdir, @sprintf("vorticity_%s_nx%d.png", tag, nx))
+mkpath(figdir)
+file = joinpath(figdir, @sprintf("vorticity_%s_nx%d.png", tag, nx))
 savefig(fig, file)
 @info "Saved $file"

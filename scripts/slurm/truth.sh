@@ -12,6 +12,9 @@
 
 module load julia                  # the same Julia module used for `julia setup.jl`
 
+# Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
+
 SEED=${SEED:-1}
 YEARS=${YEARS:-20}
 SPINUP=${SPINUP:-5}

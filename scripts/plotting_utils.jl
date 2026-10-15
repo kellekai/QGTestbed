@@ -4,6 +4,19 @@ using FFTW, Statistics
 
 const YEAR = 365 * 86400.0
 
+# Display names of the closures in plots: NEMO default as "Reynolds averaging", the others by
+# first author and year of the paper the closure was taken from. Edit here to rename everywhere.
+const LABELS = Dict(
+    "truth"             => "truth",
+    "none"              => "no closure",
+    "nemo"              => "Reynolds averaging",
+    "geometric"         => "Mak 2023",
+    "geometric_nosplit" => "Mak 2023 (no splitting)",
+    "meke"              => "Jansen 2019",
+    "reynolds"          => "Perezhogin 2023",
+)
+closure_label(c) = get(LABELS, String(c), String(c))
+
 """
     ke_spectrum_from_vorticity(Z, L) -> (k, E)
 
@@ -43,6 +56,50 @@ function mean_spectrum(vort, times, L, spinup_years)
         S = S === nothing ? s : S .+ s
     end
     return k, S ./ length(sel)
+end
+
+"""
+    spectral_ops(n, L) -> (kr, l, K2)
+
+Wavenumbers for rfft over the first dimension (x) of an n × n periodic field of side L.
+"""
+function spectral_ops(n, L)
+    kr = 2π .* (0:n÷2) ./ L
+    l  = 2π .* fftfreq(n, n) ./ L
+    return kr, l, kr .^ 2 .+ (l .^ 2)'
+end
+
+"Streamfunction from relative vorticity (∇²ψ = ζ, zero mean)."
+function psi_from_vorticity(Z, L)
+    n = size(Z, 1)
+    _, _, K2 = spectral_ops(n, L)
+    Zh = rfft(Float64.(Z))
+    ψh = ifelse.(K2 .> 0, -Zh ./ K2, 0.0im)
+    return irfft(ψh, n)
+end
+
+"Velocities (u, v) = (−∂yψ, ∂xψ) of a periodic streamfunction."
+function velocities(ψ, L)
+    n = size(ψ, 1)
+    kr, l, _ = spectral_ops(n, L)
+    ψh = rfft(Float64.(ψ))
+    u = irfft(-im .* l' .* ψh, n)
+    v = irfft(im .* kr .* ψh, n)
+    return u, v
+end
+
+"Gaussian filter (width FGR·L/n) + spectral truncation of an nT × nT field to n × n."
+function coarsegrain2d(Z, n, L; FGR = 2.0)
+    nT = size(Z, 1)
+    nT == n && return Float64.(Z)
+    nT > n || error("cannot coarse-grain a $(nT)² field to a finer $(n)² grid")
+    _, _, K2 = spectral_ops(nT, L)
+    Zh = rfft(Float64.(Z)) .* exp.(-K2 .* (FGR * L / n)^2 ./ 24)
+    lidx = vcat(1:n÷2, (nT - n÷2 + 1):nT)
+    B = Zh[1:n÷2+1, lidx] .* (n^2 / nT^2)
+    B[end, :] .= 0
+    B[:, n÷2 + 1] .= 0
+    return irfft(B, n)
 end
 
 "Largest wavenumber kept by the 2/3-rule dealiasing on an nx grid of side L."
