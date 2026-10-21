@@ -17,10 +17,13 @@ containing parameters, time series (energies, closure energy rate, closure
 scalars, resolved and parametrized meridional PV flux per layer), time-mean
 KE spectra and PV fluxes after spin-up, upper-layer relative vorticity
 snapshots and lower-layer streamfunction snapshots (`psi_lower`) from t = 0
-(Float32, every `vorticity_every_days`, including the spin-up), and (optional) full PV snapshots after spin-up for coarse-graining.
+(Float32, every `vorticity_every_days`, including the spin-up), and (optional) full PV snapshots after spin-up for coarse-graining,
+with the closure's eddy-energy field at the same times (`closure_snapshots`, geometric and meke only).
 `closure = :truth` is a no-closure run at the resolution chosen by
 `truth_resolution` when `nx = 0`. `tag` is appended to the file name and
 `metadata` (e.g. tuning parameters) is stored in the file as given.
+`aliased_fraction` (default 0 = no dealiasing, pyqg numerics; 1/3 = 2/3 rule, see
+`default_aliased_fraction`), the stepper and whether the run stopped early (NaN) are stored too.
 """
 function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
                           spinup_years = 5.0, dev = CPU(), outdir = "output",
@@ -28,7 +31,8 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
                           snapshot_every_days = Inf, vorticity_every_days = 30.0,
                           progress_every_days = 10.0,
                           seed = 1, case_kwargs = (;), closure_kwargs = (;), dt = nothing,
-                          tag = "", metadata = Dict{String, Any}())
+                          tag = "", metadata = Dict{String, Any}(),
+                          aliased_fraction = default_aliased_fraction())
     pp = physical_parameters(CaseConfig(; lat, case_kwargs...))
     is_truth = closure === :truth
     if is_truth && nx == 0
@@ -36,7 +40,8 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
     end
     cl = make_closure(is_truth ? :none : closure; closure_kwargs...)
     dt = isnothing(dt) ? default_dt(pp, nx) : dt
-    prob, m, cl = build_problem(pp, nx; closure = cl, dev, dt)
+    stepper = choose_stepper(cl)
+    prob, m, cl = build_problem(pp, nx; closure = cl, dev, dt, aliased_fraction, stepper)
     set_random_initial_condition!(prob, pp; seed)
 
     name = @sprintf("%02.0fN_nx%d_%s_seed%d", lat, nx, String(closure), seed)
@@ -53,8 +58,8 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
     log_line(@sprintf("Run %s", name))
     log_line(@sprintf("  latitude %.1f°N   f0 = %.3e s⁻¹   beta = %.3e m⁻¹s⁻¹", lat, pp.f₀, pp.β))
     log_line(@sprintf("  grid %d²   dx = %.2f km   Ld = %.2f km   dx/Ld = %.2f", nx, Δx / 1e3, pp.Ld / 1e3, Δx / pp.Ld))
-    log_line(@sprintf("  shear dU = %.4f m/s   criticality xi = %.2f", pp.ΔU, pp.ξ))
-    log_line(@sprintf("  closure %s   stepper %s   settings %s", String(closure), default_stepper(cl),
+    log_line(@sprintf("  shear dU = %.4f m/s   criticality xi = %.2f   dealiasing aliased_fraction = %.3f", pp.ΔU, pp.ξ, aliased_fraction))
+    log_line(@sprintf("  closure %s   stepper %s   settings %s", String(closure), stepper,
                       join(["$k=$v" for (k, v) in closure_settings(cl)], ", ")))
     log_line(@sprintf("  dt = %.1f s   %d steps (%.1f yr, spin-up %.1f yr = %d steps)", dt, nsteps, years, spinup_years, nspin))
     log_line(@sprintf("  Julia threads %d   FFT planning threads (JULIA_CPU_THREADS) %d", Threads.nthreads(), Sys.CPU_THREADS))
@@ -74,6 +79,7 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
     flux_sum = zeros(2)
     snapshots = Array{Float64, 3}[]
     snaptimes = Float64[]
+    closure_snapshots = Array{Float64, 2}[]   # eddy-energy field of the closure at the snapshot times
     Fqh = similar(prob.sol)
 
     t0 = time()
@@ -134,6 +140,8 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
         if n > nspin && n % nsnap == 0
             push!(snapshots, Array(f.q))
             push!(snaptimes, prob.clock.t)
+            s = closure_state(cl)
+            s === nothing || push!(closure_snapshots, Float64.(s))
         end
 
     end
@@ -147,9 +155,10 @@ function run_simulation(; lat = 49.0, nx = 64, closure = :none, years = 20.0,
             ke_spectrum_mean = isnothing(spec_sum) ? nothing : spec_sum ./ nspec_acc,
             pv_flux_mean = flux_sum ./ max(nspec_acc, 1),
             q_final = Array(layerfields(prob.sol, m).q),
-            snapshots, snaptimes,
+            snapshots, snaptimes, closure_snapshots,
             vorticity_upper = vort1, vorticity_times = vorttimes, psi_lower = psi2,
-            metadata = Dict{String, Any}(metadata), spinup_years)
+            metadata = Dict{String, Any}(metadata), spinup_years, aliased_fraction,
+            stepper, stopped_early)
     log_line(@sprintf("[%s] saved", name))
     return file
 end

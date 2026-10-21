@@ -11,6 +11,11 @@
 # -t DIR   folder with the truth runs (default: same as -d); if the -d folder has no
 #          no-closure runs ('none'), they are also taken from here as the reference
 # -s S     spin-up in years excluded from the time means (default 5)
+# -S LAT=S,…  per-latitude spin-up overriding -s, e.g. -S 70=15 (slow spin-up at high latitude);
+#          applies to all runs at that latitude, truth included, so they share the same window
+# -T       transient eddies only: KE spectra of ζ′ = ζ − ζ̄ (time mean over the snapshots after the
+#          spin-up removed, i.e. without persistent jets); affects the spectral error and resolved KE
+#          (PV flux unchanged). Output names get "_transient": scale_awareness_transient.csv, …
 # -g N,…   grids to plot, e.g. -g 64 or -g 32,64 (default: all); the figure names then
 #          end in _nx64 (or _nx32-64), the CSV always contains all grids
 #
@@ -46,12 +51,22 @@ include(joinpath(@__DIR__, "plotting_utils.jl"))
 
 # --- arguments -------------------------------------------------------------------
 outdir, spinup, truthdir, gridsel = "output", 5.0, "", Int[]
+spinup_lat = Dict{Int, Float64}()
+transient = false
 let i = 1
     while i <= length(ARGS)
         if ARGS[i] == "-d"
             global outdir = ARGS[i+1]; i += 2
         elseif ARGS[i] == "-s"
             global spinup = parse(Float64, ARGS[i+1]); i += 2
+        elseif ARGS[i] == "-T"
+            global transient = true; i += 1
+        elseif ARGS[i] == "-S"
+            for kv in split(ARGS[i+1], ",")
+                a, b = split(kv, "=")
+                spinup_lat[parse(Int, a)] = parse(Float64, b)
+            end
+            i += 2
         elseif ARGS[i] == "-t"
             global truthdir = ARGS[i+1]; i += 2
         elseif ARGS[i] == "-g"
@@ -62,7 +77,8 @@ let i = 1
     end
 end
 
-const CLOSURE_ORDER = ["none", "nemo", "geometric", "geometric_nosplit", "meke", "reynolds"]
+const CLOSURE_ORDER = ["none", "nemo_eorca025", "nemo", "geometric_eorca025", "geometric", "geometric_nosplit", "meke", "reynolds"]
+spinup_at(lat) = get(spinup_lat, lat, spinup)
 # Legend names come from LABELS in plotting_utils.jl.
 const MAX_DECADES = 6.0
 const PATTERN = r"^(\d+)N_nx(\d+)_(.+)_seed(\d+)\.jld2$"
@@ -84,10 +100,11 @@ function summarize(path, lat, nx, closure, seed)
     jldopen(path, "r") do f
         pp = f["params"]
         haskey(f, "vorticity_upper") || (@warn "$path: no vorticity snapshots, skipped"; return nothing)
-        res = mean_spectrum(f["vorticity_upper"], f["vorticity_times"], pp.L, spinup)
+        sp = spinup_at(lat)
+        res = mean_spectrum(f["vorticity_upper"], f["vorticity_times"], pp.L, sp; transient)
         res === nothing && (@warn "$path: no snapshots after spin-up, skipped"; return nothing)
         ts = f["timeseries"]
-        late = ts["t"] .> spinup * YEAR
+        late = ts["t"] .> sp * YEAR
         haskey(ts, "vq_resolved_1") || (@warn "$path: no PV-flux time series, skipped"; return nothing)
         vq = mean(ts["vq_resolved_1"][late]) + mean(ts["vq_param_1"][late])
         return RunSummary(lat, nx, closure, seed, pp.L, pp.Ld, res[1], res[2], vq)
@@ -117,6 +134,7 @@ else
         @info "no-closure runs ('none') taken from $truthdir as reference"
 end
 isempty(runs) && error("no usable run files in $outdir")
+isempty(spinup_lat) || println("spin-up: $(spinup) yr, except ", join(["$(k)°N: $(v) yr" for (k, v) in sort(collect(spinup_lat))], ", "))
 
 # --- truth reference per latitude (averaged over truth seeds) -----------------------
 truth = Dict{Int, NamedTuple}()
@@ -155,7 +173,9 @@ for row in rows
     push!(get!(groups, (row.r.lat, row.r.nx, row.r.closure), Any[]), row)
 end
 
-csvfile = joinpath(outdir, "scale_awareness.csv")
+tag = transient ? "_transient" : ""
+transient && println("KE spectra of the transient eddies (time mean removed)")
+csvfile = joinpath(outdir, "scale_awareness$(tag).csv")
 open(csvfile, "w") do io
     println(io, "lat,nx,closure,Ld_over_dx,dx_over_Ld,n_seeds,spectral_error,spectral_error_min,spectral_error_max,resolved_KE_rel_error,resolved_KE_min,resolved_KE_max,PV_flux_rel_error,PV_flux_min,PV_flux_max")
     for key in sort(collect(keys(groups)))
@@ -237,7 +257,7 @@ for (f, title, fname) in METRICS
     fig = plot(rows...; layout = (length(grids), 1),
                size = (1000, length(grids) == 1 ? 520 : 330 * length(grids)),
                left_margin = 8Plots.mm, bottom_margin = 4Plots.mm, right_margin = 4Plots.mm)
-    png = joinpath(outdir, "scale_awareness_$(fname)$(suffix).png")
+    png = joinpath(outdir, "scale_awareness_$(fname)$(suffix)$(tag).png")
     savefig(fig, png)
     @info "Saved $png"
 end

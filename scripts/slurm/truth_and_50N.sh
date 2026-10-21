@@ -13,6 +13,12 @@
 #SBATCH --output=truth50_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+# Numerics (README section 7d): no 2/3 dealiasing (validated against pyqg); exponential filter for
+# all closures only if QG_FILTER_ALL=true (decide with scripts/slurm/stability.sh). Override when
+# submitting, e.g.  QG_FILTER_ALL=true sbatch ...
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
 
 # Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
 julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }

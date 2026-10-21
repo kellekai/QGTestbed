@@ -19,22 +19,30 @@
 #   Δψ̂_L = Δψ̂ / (1 + L²k²)^M. The background shear is large scale by definition.
 #   `splitting = false` gives the original GEOMETRIC.
 #
-# Defaults from Mak et al. (2023) Table 1: α = 0.06, λ⁻¹ = 80 d,
-# η_E = 500 m² s⁻¹, Ê₀ = 4 m³ s⁻². Momentum dissipation as in their NEMO runs:
-# bilaplacian ahm = U_v Δx³ / 12 with U_v = 0.1 m/s (their Table shows larger
-# values than this formula gives; check before comparing to NEMO directly).
+# Defaults follow the authors' NEMO 4.0.5 code and namelists for the eddy-permitting runs
+# (MY_SRC/ldfeke.F90, ldftra_split.F90; EXP00/namelist_cfg_R010/R025/R050):
+#   rn_geom = 0.06 (α), rn_ekedis = 80 d (λ⁻¹), rn_eke_lap = 500 m²/s (η_E),
+#   rn_eke_min = 5 m³/s² (Ê₀; the paper's table gives 4), nn_eke_opt = 1 (PE→EKE, dissipation,
+#   advection by the depth-mean flow and the long Rossby speed; no KE→EKE source),
+#   rn_aeiv_min = 10 m²/s, rn_aeiv_max = 3·10⁴ m²/s (bounds on κ_gm),
+#   splitting: (1 − L²∇²) solved twice = (1 + L²k²)⁻² on T and S, rn_L = 100 km (R025, R050;
+#   200 km at R010), slopes and N² for κ_gm, the source and the GM velocities from the large scale,
+#   momentum: bilaplacian, nn_ahm_ijk_t = 0, ahm = U_v Δx³/12 with rn_Uv = 0.5 m/s, rn_Lv = Δx.
+# Not reproduced: the taper of κ_gm where 0.5∫N dz/f < rn_ross_min = 7 km (that radius is
+# ≥ 19 km at every testbed latitude, so the taper is 1).
 # ----------------------------------------------------------------------------
 
 Base.@kwdef mutable struct GEOMETRIC <: AbstractClosure
     α::Float64 = 0.06
     λ::Float64 = 1 / (80 * 86400.0)
     ηE::Float64 = 500.0
-    E0::Float64 = 4.0
+    E0::Float64 = 5.0          # rn_eke_min of the authors' runs (paper table: 4)
     splitting::Bool = true
     L_split::Float64 = 100e3
     M_split::Int = 2
-    Uv::Float64 = 0.1
-    κ_max::Float64 = Inf       # no cap, as published; finite values are a deviation
+    Uv::Float64 = 0.5          # rn_Uv of the authors' eddy-permitting runs (bilaplacian, Lv = Δx)
+    κ_max::Float64 = 3.0e4     # rn_aeiv_max
+    κ_min::Float64 = 10.0      # rn_aeiv_min
     shear_min::Float64 = 1e-4  # m/s, avoids division by zero in κ
     westward_advection::Bool = true
     ahm::Float64 = NaN
@@ -60,7 +68,7 @@ end
 function geometric_kappa(gx, gy, c::GEOMETRIC, m)
     shear = @. max(sqrt(gx^2 + gy^2), c.shear_min)
     κ = @. c.α * c.E * sqrt(m.g′ / m.Htot) / (m.f₀ * shear)
-    return min.(κ, c.κ_max)
+    return clamp.(κ, c.κ_min, c.κ_max)
 end
 
 function pv_tendency!(Fqh, c::GEOMETRIC, f, m)
@@ -93,6 +101,9 @@ function param_pv_flux(c::GEOMETRIC, f, m)
     gx, gy = interface_gradient(ΔψLh, m)
     return gm_param_flux(geometric_kappa(gx, gy, c, m), gy, m)
 end
+
+closure_state(c::GEOMETRIC) = Array(c.E)
+set_closure_state!(c::GEOMETRIC, s) = (copyto!(c.E, s); nothing)
 
 closure_diagnostics(c::GEOMETRIC, m) =
     (E_param = mean(c.E), kappa_gm = mean(c.κ), kappa_gm_max = maximum(c.κ))

@@ -4,14 +4,17 @@ using FFTW, Statistics
 
 const YEAR = 365 * 86400.0
 
-# Display names of the closures in plots: NEMO default as "Reynolds averaging", the others by
+# Display names of the closures in plots: "NEMO 1/4°" = our eORCA025 setup (no GM), "NEMO 1/4° + GM" =
+# NEMO reference GM and bilaplacian; the others by
 # first author and year of the paper the closure was taken from. Edit here to rename everywhere.
 const LABELS = Dict(
     "truth"             => "truth",
     "none"              => "no closure",
-    "nemo"              => "Reynolds averaging",
-    "geometric"         => "Mak 2023",
-    "geometric_nosplit" => "Mak 2023 (no splitting)",
+    "nemo"              => "NEMO 1/4° + GM",
+    "nemo_eorca025"     => "NEMO 1/4°",
+    "geometric"         => "Mak 2023 (U_v = 0.5)",
+    "geometric_nosplit" => "Mak 2023 (no splitting, U_v = 0.5)",
+    "geometric_eorca025" => "Mak 2023",
     "meke"              => "Jansen 2019",
     "reynolds"          => "Perezhogin 2023",
 )
@@ -43,16 +46,19 @@ function ke_spectrum_from_vorticity(Z, L)
 end
 
 """
-    mean_spectrum(vort, times, L, spinup_years) -> (k, E) or nothing
+    mean_spectrum(vort, times, L, spinup_years; transient = false) -> (k, E) or nothing
 
 Time-mean upper-layer KE spectrum over the vorticity snapshots after the spin-up.
+`transient = true`: spectrum of the transient eddies only, ζ′ = ζ − ζ̄ with ζ̄ the time mean
+over the same snapshots (removes persistent jets and other time-mean structures).
 """
-function mean_spectrum(vort, times, L, spinup_years)
+function mean_spectrum(vort, times, L, spinup_years; transient = false)
     sel = findall(>(spinup_years * YEAR), times)
     isempty(sel) && return nothing
+    zbar = transient ? sum(Float64.(vort[j]) for j in sel) ./ length(sel) : 0.0
     k, S = nothing, nothing
     for j in sel
-        k, s = ke_spectrum_from_vorticity(vort[j], L)
+        k, s = ke_spectrum_from_vorticity(Float64.(vort[j]) .- zbar, L)
         S = S === nothing ? s : S .+ s
     end
     return k, S ./ length(sel)

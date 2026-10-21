@@ -29,8 +29,9 @@ function ModelContext(prob, pp)
     T = eltype(grid)
     nkr, nl = size(grid.Krsq)
     mask_cpu = ones(T, nkr, nl)
-    mask_cpu[grid.kralias, :] .= 0
-    mask_cpu[:, grid.lalias] .= 0
+    # no aliased wavenumbers when dealiasing is off (aliased_fraction = 0)
+    (grid.kralias === nothing || isempty(grid.kralias)) || (mask_cpu[grid.kralias, :] .= 0)
+    (grid.lalias === nothing || isempty(grid.lalias)) || (mask_cpu[:, grid.lalias] .= 0)
     mask = device_array(grid.device)(mask_cpu)
     real3 = similar(prob.vars.q)
     cplx3 = similar(prob.sol)

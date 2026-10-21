@@ -255,6 +255,24 @@ All plotting uses the separate environment: `julia --project=plotting …` (run 
    domain mean, with k the angular wavenumber; if pyqg normalizes differently, absolute values can
    differ from the paper by a constant factor while shapes and ratios stay comparable.
 
+9. **All closures in the same layout** (`scripts/closure_comparison.sh`): truth and, on 64², no
+   closure, Reynolds averaging (NEMO default with GM, and `nemo_eorca025`: our eORCA025 namelist a3ue,
+   no GM, bilaplacian rn_Uv = 0.0838), Mak 2023, Jansen 2019 and Perezhogin 2023 (C_R = 7), as
+   published, at 40°N by default (20 years, spin-up 8, 10 seeds, sweep numerics: no dealiasing,
+   `QG_FILTER_ALL=true`). Panel (d) shows each closure's full energy transfer (GM, viscosity and
+   backscatter; the exponential filter is not included) against the exact subgrid transfer of the
+   truth. For Mak and Jansen the eddy-energy field is stored with each PV snapshot
+   (`closure_snapshots` in the run file) so their tendency can be recomputed offline.
+   ```bash
+   sbatch scripts/closure_comparison.sh                               # 40°N
+   LAT=30 sbatch scripts/closure_comparison.sh                        # another latitude
+   julia --project=. scripts/closure_comparison_spectra.jl closure-comparison/40N_nx64 64
+   julia --project=plotting scripts/plot_closure_comparison.jl closure-comparison/40N_nx64 [none,nemo,reynolds]
+   ```
+   Output in `closure-comparison/<lat>N_nx64/`: `closure_comparison.png` (all closures),
+   `closure_comparison_none-nemo-reynolds.png`, the CSV curves and a table of KE/truth and the
+   integrated transfers in `logs/spectra.log`.
+
 ---
 
 ## 7b. Tuning exercise (separate from the as-published comparison)
@@ -283,8 +301,8 @@ Names as typed on the command line, in convenient units (converted to SI by `scr
 | closure | parameters | published values |
 |---|---|---|
 | `nemo` | `Uv` (m/s, bilaplacian), `Ue` (m/s, GM), `Le_km` | Uv = 0.1, Ue = 0.02, Le = Δx |
-| `geometric`, `geometric_nosplit` | `alpha`, `lambda_days`, `etaE` (m²/s), `E0` (m³/s²), `L_split_km`, `Uv` | 0.06, 80, 500, 4, 100, 0.1 |
-| `meke` | `c`, `c_smag`, `tau_vis_days`, `c_d`, `U_bg` (m/s) | 0.15, 0.06, 45, 0.03, 0.1 |
+| `geometric`, `geometric_nosplit` | `alpha`, `lambda_days`, `etaE` (m²/s), `E0` (m³/s²), `L_split_km`, `Uv` | 0.06, 80, 500, 5, 100, 0.5 |
+| `meke` | `c`, `c_smag`, `tau_vis_days`, `c_d`, `U_bg` (m/s) | 0.15, 0.06, 45, 0.003, 0.1 |
 | `reynolds` | `C_R`, `FGR` | 7, 2 |
 
 ### Step 1 — calibration runs
@@ -427,6 +445,60 @@ julia --project=plotting scripts/scale_awareness.jl -d output/tuned -t output
 This writes the scale-awareness table and figures into `output/tuned/`; put them next to the
 as-published ones in `output/` to see what tuning changed at each Δx/Ld.
 
+## 7d. Numerics: dealiasing, the pyqg validation and the stability test
+
+**Dealiasing is off by default (`aliased_fraction = 0`).** GeophysicalFlows applies the 2/3 rule to the
+nonlinear term by default; pyqg does not and relies on its exponential filter alone. With the 2/3 rule,
+the 64² runs had about half of pyqg's eddy energy transfer, so every coarse model, with or without a
+closure, was too dissipative in the gray zone. Without it, the testbed reproduces pyqg and
+Perezhogin & Glazunov (2023, Fig. 10) at 64²: the KE spectra, the resolved KE and APE transfers and the
+subgrid transfer of the Reynolds closure agree with pyqg running the authors' own `Reynolds_stress`
+code within a few percent (ensemble scatter). The validation is reproducible with
+`scripts/perezhogin_validation.sh` (testbed) and the separate `pyqg-validation` package (pyqg, with
+`analyze_pyqg.py --testbed` overlaying both).
+
+The setting is read from the environment variable `QG_ALIASED_FRACTION` (default 0); all batch scripts
+export it and print it, and every output file stores `aliased_fraction` and `stepper`.
+**Runs made before this change used 1/3** (files without an `aliased_fraction` entry). Do not mix them
+with new runs in one analysis; to reproduce them, submit with `QG_ALIASED_FRACTION=0.3333333`.
+
+**Stability test.** `nemo`, `geometric`, `geometric_nosplit` and `meke` bring their own dissipation and
+run with plain RK4, without the exponential filter. Without dealiasing, nothing else removes grid-scale
+aliasing, so check them before the sweep:
+
+```bash
+sbatch scripts/slurm/stability.sh                       # closures as published (plain RK4)
+cat output/stability_filter-false/stability_summary.txt
+```
+
+All closures on 64² at all six latitudes, 5 years each (36 runs, about an hour); set `GRIDS="32 64 128"` (and `LATS`) when submitting for more.
+`scripts/stability_check.jl` flags runs that stopped on NaN (`UNSTABLE`), pile up energy above 0.65 k_max
+(`NOISY`: grid fraction > 0.02 and > 3× the filtered no-closure run) or keep growing (`GROWING`).
+If all runs are `ok`, keep `QG_FILTER_ALL=false`. Otherwise repeat with the filter for every closure:
+
+```bash
+QG_FILTER_ALL=true sbatch scripts/slurm/stability.sh
+cat output/stability_filter-true/stability_summary.txt
+```
+
+and, if that is clean, submit every job of the sweep with `QG_FILTER_ALL=true` (as in pyqg, where all
+runs have the filter; report it as a numerical choice, the closures' own dissipation is unchanged).
+
+### Rerunning everything with the new numerics
+
+```bash
+# 0. keep the old (dealiased) results apart
+mv output output_dealiased && mv logs logs_dealiased
+rm -f *_joblog.txt                     # old GNU parallel job logs would mark runs as done
+# 1. update the code, then on the login node
+julia setup.jl && julia setup.jl plotting
+# 2. stability test (decides QG_FILTER_ALL), see above
+# 3. truth runs, coarse sweep, analysis (Sections 4, 5, 7), tuning (7b, 7c) as before,
+#    with QG_FILTER_ALL=true in front of every sbatch if step 2 requires it
+```
+
+---
+
 ## 8. How each closure is implemented (2-layer translation)
 
 All closures add a PV tendency per layer through the `calcFq` hook of `MultiLayerQG`.
@@ -437,7 +509,7 @@ Prognostic eddy energy is stepped once per time step.
 | `none` | FilteredRK4 (exponential spectral filter, as in pyqg) | – |
 | `nemo` | RK4, bilaplacian ahm = U_v Δx³/12 | GM, κ = U_e L_e/2 |
 | `geometric(_nosplit)` | RK4, bilaplacian as `nemo` | GM, κ = α Ê/∫(M²/N)dz with prognostic Ê |
-| `meke` | RK4, biharmonic Smagorinsky | GM + negative Laplacian viscosity ν₂ = −K_GM, prognostic MEKE |
+| `meke` | RK4, biharmonic Smagorinsky | GM + negative Laplacian viscosity ν₂ = −c√(2e)L_mix (not scaled by R, as in the authors' MOM6 code), prognostic MEKE |
 | `reynolds` | FilteredRK4 (as in the paper's pyqg runs) | −C_R ∇·σ^KEB on PV, both layers |
 
 - GM in QG = down-gradient diffusion of the stretching part of PV (interface height):
@@ -453,8 +525,8 @@ Prognostic eddy energy is stepped once per time step.
 | closure | values used | source |
 |---|---|---|
 | `nemo` | U_v = 0.1 m/s, U_e = 0.02 m/s, L_e = Δx | NEMO 4 grid-scaled coefficients; **set to your namelist** (namdyn_ldf, namtra_eiv) |
-| `geometric` | α = 0.06, λ⁻¹ = 80 d, η_E = 500 m²/s, Ê₀ = 4 m³/s², splitting L = 100 km, M = 2, no κ cap | Mak et al. (2023), Table 1 and Sec. 3 |
-| `meke` | c = 0.15, c_smag = 0.06, τ_vis = 45 d, c_d = 0.03, U_bg = 0.1 m/s | Jansen et al. (2019) |
+| `geometric` | α = 0.06, λ⁻¹ = 80 d, η_E = 500 m²/s, Ê₀ = 5 m³/s², 10 ≤ κ ≤ 3·10⁴ m²/s, splitting L = 100 km, M = 2, bilaplacian U_v = 0.5 m/s | Mak et al. (2023): the authors' NEMO 4.0.5 code and namelists (R025/R050); see below |
+| `meke` | c = 0.15, c_smag = 0.06, τ_vis = 45 d, c_d = 0.003, U_bg = 0.1 m/s | Jansen et al. (2019): the authors' MOM6 parameter files ([MFJansen/MEKE_GM_BS_parameters](https://github.com/MFJansen/MEKE_GM_BS_parameters)); see below |
 | `reynolds` | C_R = 7, filter-to-grid ratio 2, Gaussian filter | Perezhogin & Glazunov (2023), QG experiments |
 
 Choices where a paper leaves something open or the 2-layer translation needs one:
@@ -462,6 +534,37 @@ Choices where a paper leaves something open or the 2-layer translation needs one
   same ν₂ in both layers (vertical structure not specified in the paper).
 - Mak et al.: the bilaplacian formula is used; the values in their table are about 5× larger.
 - Perezhogin & Glazunov: `dynamic_CR` exists in the code but is not part of the paper and is off.
+
+### Jansen et al. (2019): paper text vs the runs that produced the paper
+
+The MEKE closure follows the authors' published MOM6 parameter files and MOM6 code, which differ
+from the paper's text in four places. The parameter files are what was run, so they are the default;
+the paper-text variant remains available through closure options:
+
+| | paper text | authors' runs (default here) | option |
+|---|---|---|---|
+| drag coefficient | c_d = 0.03 | `CDRAG = 0.003` | `c_d` |
+| backscatter viscosity | ν₂ = −K_GM (includes R) | `MEKE%Ku = −0.15·√(2e)·L_mix`, added without R (`MOM_hor_visc`) | `bs_resolution_scaled` |
+| drag velocity | √(e + u_bot² + U_bg²) | √(2·MEKE + u_bot² + `DRAG_BG_VEL`²), `MEKE_CD_SCALE = 1` | `drag_eke_factor` (2 or 1) |
+| biharmonic viscosity | (c_smag·\|D\| + 1/τ)·Δ⁴ | max(Smagorinsky, Δ⁴/`AH_TIME_SCALE`) | `nu4_max` |
+
+Unchanged and confirmed by the files: c = 0.15 (`MEKE_KHCOEFF`), R = 1/(1 + π·Ld/Δx)
+(`KH_RES_SCALE_COEF = π`, `KH_RES_FN_POWER = 1`), L_mix = min(Δ, Rhines scale), K_e = c·√(2e)·L_mix,
+c_smag = 0.06, τ_vis = 45 d, U_bg = 0.1 m/s, drag divided by the column depth.
+Runs with `meke` made before this change used the paper-text variant.
+
+### Mak et al. (2023): checked against the authors' NEMO code
+
+`ldfeke.F90` and `ldftra_split.F90` of the authors' NEMO 4.0.5 code implement the same formulas
+as the testbed: κ_gm = α·Ê / ∫(M²/N) dz, source ∫κ·M⁴/N² dz, dissipation −λ(Ê − Ê₀), advection by
+the depth-mean flow and the long Rossby speed, Laplacian diffusion of Ê, and splitting by solving
+(1 − L²∇²) twice on T and S, with slopes and N² then taken from the large-scale field. The namelists of
+their eddy-permitting runs (R010–R050) differ from the earlier defaults here in three values, now
+adopted: bilaplacian viscosity `rn_Uv = 0.5` m/s (was 0.1), `rn_eke_min = 5` m³/s² (was 4, as in the
+paper's table) and the bounds 10 ≤ κ_gm ≤ 3·10⁴ m²/s (was uncapped). Their taper of κ_gm for
+deformation radii below 7 km is inactive at all testbed latitudes and not reproduced. Their R010
+run uses a 200 km splitting scale; the testbed keeps the 100 km of R025 and R050.
+Runs with `geometric*` made before this change used the earlier values.
 
 ### Known limitations of this testbed
 
@@ -494,10 +597,16 @@ scripts/plot_summary.jl       energy time series and KE spectra
 scripts/plot_circulation.jl   mean flow and eddies: SSH contours, transport shading (Jansen et al. Fig. 3)
 scripts/scale_awareness.jl    metrics of every run vs truth, plotted against Ld/Δx
 scripts/meke_budget.jl        energy budget of the MEKE closure (what sets K_GM)
+scripts/stability_check.jl    stability test of the closures without dealiasing (Section 7d)
+scripts/slurm/stability.sh    Slurm job: stability test (Section 7d)
 scripts/perezhogin_validation.sh         Slurm job: Perezhogin & Glazunov (2023) Fig. 8 validation at 49°N
 scripts/perezhogin_validation_run.jl     one run of that validation (truth / none / reynolds)
 scripts/perezhogin_validation_spectra.jl its spectra and energy transfers (model environment)
 scripts/plot_perezhogin_validation.jl    its figure (plotting environment)
+scripts/closure_comparison.sh            Slurm job: all closures in the Fig. 10 layout (default 40°N, 64²)
+scripts/closure_comparison_run.jl        one run of that comparison (truth or one closure)
+scripts/closure_comparison_spectra.jl    its spectra and energy transfers, incl. each closure's transfer
+scripts/plot_closure_comparison.jl       its figure (plotting environment; optional closure subset)
 scripts/plotting_utils.jl     shared spectrum helpers for the plotting scripts
 scripts/slurm/truth.sh        Slurm job: truth runs
 scripts/slurm/truth_and_50N.sh  Slurm job: truth runs + 50°N 64² closure runs
@@ -551,6 +660,12 @@ inside a script must be followed by `wait`, otherwise the job ends immediately a
 #SBATCH --output=truth_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+# Numerics (README section 7d): no 2/3 dealiasing (validated against pyqg); exponential filter for
+# all closures only if QG_FILTER_ALL=true (decide with scripts/slurm/stability.sh). Override when
+# submitting, e.g.  QG_FILTER_ALL=true sbatch ...
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
 
 # Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
 julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
@@ -592,6 +707,12 @@ wait
 #SBATCH --output=truth50_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+# Numerics (README section 7d): no 2/3 dealiasing (validated against pyqg); exponential filter for
+# all closures only if QG_FILTER_ALL=true (decide with scripts/slurm/stability.sh). Override when
+# submitting, e.g.  QG_FILTER_ALL=true sbatch ...
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
 
 # Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
 julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
@@ -632,6 +753,12 @@ wait    # keep the job alive until every run above has finished
 #SBATCH --output=coarse_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+# Numerics (README section 7d): no 2/3 dealiasing (validated against pyqg); exponential filter for
+# all closures only if QG_FILTER_ALL=true (decide with scripts/slurm/stability.sh). Override when
+# submitting, e.g.  QG_FILTER_ALL=true sbatch ...
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
 module load parallel 2>/dev/null   # GNU parallel, if not on the default path
 
 # Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
@@ -660,6 +787,12 @@ parallel -j 100 --joblog coarse_joblog.txt --resume-failed --results logs/ < coa
 #SBATCH --output=tune_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+# Numerics (README section 7d): no 2/3 dealiasing (validated against pyqg); exponential filter for
+# all closures only if QG_FILTER_ALL=true (decide with scripts/slurm/stability.sh). Override when
+# submitting, e.g.  QG_FILTER_ALL=true sbatch ...
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
 module load parallel 2>/dev/null
 
 # Compile QGTestbed once before starting the runs, so they don't all compile it at the same time
@@ -705,6 +838,12 @@ parallel -j 100 --joblog ${JOBS%.txt}_joblog.txt --resume-failed --results logs/
 #SBATCH --output=tune_seeds_%j.out
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+# Numerics (README section 7d): no 2/3 dealiasing (validated against pyqg); exponential filter for
+# all closures only if QG_FILTER_ALL=true (decide with scripts/slurm/stability.sh). Override when
+# submitting, e.g.  QG_FILTER_ALL=true sbatch ...
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
 module load parallel 2>/dev/null
 
 : "${CLOSURE:?set CLOSURE, e.g. CLOSURE=reynolds}"
@@ -775,6 +914,12 @@ NPAR=100                                                          # runs at a ti
 # ================================================================================
 
 module load julia                  # the same Julia module used for `julia setup.jl`
+# Numerics (README section 7d): no 2/3 dealiasing (validated against pyqg); exponential filter for
+# all closures only if QG_FILTER_ALL=true (decide with scripts/slurm/stability.sh). Override when
+# submitting, e.g.  QG_FILTER_ALL=true sbatch ...
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
 module load parallel 2>/dev/null
 
 params_for() {
@@ -820,6 +965,145 @@ done; done; done; done
 echo "$(wc -l < "$JOBS") runs in $JOBS"
 
 parallel -j $NPAR --joblog tuned_sweep_joblog.txt --resume-failed --results logs/tuned/ < "$JOBS"
+```
+
+### Stability test (Section 7d): `scripts/slurm/stability.sh`
+
+```bash
+#!/bin/bash
+# Stability test of the closures without 2/3 dealiasing (README section 7d).
+# nemo, geometric, geometric_nosplit and meke run with plain RK4 and their own dissipation; with
+# dealiasing switched off nothing else removes grid-scale aliasing. This job runs every closure
+# (published settings) for a few years on all grids at four latitudes, then
+# scripts/stability_check.jl reports runs that blew up (NaN) or pile up energy at the grid scale.
+# Submit from the QGTestbed folder:
+#   sbatch scripts/slurm/stability.sh                       # closures as published (plain RK4)
+#   QG_FILTER_ALL=true sbatch scripts/slurm/stability.sh    # every closure with the exponential filter
+# Results go to output/stability_filter-<QG_FILTER_ALL>/, a table to stability.csv in that folder.
+#SBATCH --job-name=qg_stability
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=112
+#SBATCH --time=06:00:00
+#SBATCH --account=<your_account>
+#SBATCH --qos=<your_qos>
+#SBATCH --output=stability_%j.out
+
+# ============================ settings ==========================================
+LATS="20 40 60 70"
+GRIDS="32 64 128"
+CLOSURES="none nemo geometric geometric_nosplit meke reynolds"   # none = filtered reference
+YEARS=5
+SPINUP=1
+SEED=1
+NPAR=100
+# ================================================================================
+
+module load julia                  # the same Julia module used for `julia setup.jl`
+export QG_ALIASED_FRACTION=${QG_ALIASED_FRACTION:-0}
+export QG_FILTER_ALL=${QG_FILTER_ALL:-false}
+echo "numerics: aliased_fraction = $QG_ALIASED_FRACTION, exponential filter for all closures = $QG_FILTER_ALL"
+module load parallel 2>/dev/null
+set -o pipefail
+
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
+export JULIA_NUM_THREADS=1
+
+OUTDIR=output/stability_filter-${QG_FILTER_ALL}
+mkdir -p "$OUTDIR" logs/stability
+JOBS=$OUTDIR/stability_jobs.txt
+> "$JOBS"
+for lat in $LATS; do for nx in $GRIDS; do for cl in $CLOSURES; do
+    echo "JULIA_CPU_THREADS=1 julia -t 1 --project=. scripts/tune_member.jl $lat $nx $cl $YEARS $SPINUP $SEED $OUTDIR --no-tag" >> "$JOBS"
+done; done; done
+echo "$(wc -l < "$JOBS") runs"
+
+parallel -j $NPAR --joblog "$OUTDIR/stability_joblog.txt" --resume-failed --results logs/stability/ < "$JOBS"
+
+julia --project=plotting scripts/stability_check.jl -d "$OUTDIR" -s $SPINUP 2>&1 | tee "$OUTDIR/stability_summary.txt"
+```
+
+### Perezhogin & Glazunov (2023) validation (Section 7, item 8): `scripts/perezhogin_validation.sh`
+
+```bash
+#!/bin/bash
+# Validation against Perezhogin & Glazunov (2023), Fig. 10 (Fig. 8 in the preprint): the pyqg "eddy" configuration
+# (49°N member of the testbed), truth on 256², 64² without closure and 64² with the
+# Reynolds-stress backscatter (C_R = 7), then spectra, energy transfers and the figure.
+# Submit from the QGTestbed root folder:
+#   sbatch scripts/perezhogin_validation.sh
+# Everything (runs, logs, spectra.jld2, perezhogin_validation.png) goes to $OUTDIR, a subfolder of
+# perezhogin-validation/ named after the dealiasing setting, so runs with other settings stay apart.
+# Needs the model environment (julia setup.jl) and the plotting environment (julia setup.jl plotting).
+# Rerunning skips runs whose output file already exists; delete them to start over.
+#SBATCH --job-name=qg_perezhogin_val
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=112
+#SBATCH --time=24:00:00
+#SBATCH --account=<your_account>
+#SBATCH --qos=<your_qos>
+#SBATCH --output=perezhogin_validation_%j.out
+
+# ============================ settings ==========================================
+ALIASED_FRACTION=0  # 0 = no 2/3 dealiasing, exponential filter only, as in pyqg; 0.3333333 = testbed default
+OUTDIR=perezhogin-validation/aliased_fraction_${ALIASED_FRACTION}
+LAT=49            # 49°N = the pyqg eddy configuration (Ld = 15 km, beta = 1.5e-11, dU = 0.025 m/s)
+NX_TRUTH=256      # as in Ross et al. (2023) / Perezhogin & Glazunov (2023)
+NX_COARSE=64
+C_R=7             # published value for this setup
+YEARS=20          # Perezhogin & Glazunov (2023): averages over years 5-20
+SPINUP=5
+SNAPSHOT_DAYS=30  # PV snapshots for the spectra, after the spin-up (181 per run)
+SEEDS="1 2 3 4 5 6 7 8 9 10"   # ensemble of 10 members, as in the paper
+TRUTH_THREADS=8   # 10 truth runs x 8 + 20 coarse runs x 1 = 100 cores
+# ================================================================================
+
+module load julia                  # the same Julia module used for `julia setup.jl`
+set -o pipefail                    # a failing julia step is not hidden by `tee`
+
+julia --project=. -e 'using QGTestbed' || { echo "QGTestbed does not load: run 'julia setup.jl' on the login node"; exit 1; }
+julia --project=plotting -e 'using JLD2, Plots' || { echo "plotting environment missing: run 'julia setup.jl plotting'"; exit 1; }
+
+mkdir -p "$OUTDIR/logs"
+{
+    echo "Perezhogin & Glazunov (2023) validation, $(date)"
+    echo "lat $LAT | truth ${NX_TRUTH}² | coarse ${NX_COARSE}² | C_R $C_R | years $YEARS | spin-up $SPINUP | snapshots every $SNAPSHOT_DAYS d | seeds $SEEDS | aliased_fraction $ALIASED_FRACTION"
+} > "$OUTDIR/settings.txt"
+cat "$OUTDIR/settings.txt"
+
+run() {   # member nx threads seed
+    local member=$1 nx=$2 threads=$3 seed=$4
+    local file="$OUTDIR/${LAT}N_nx${nx}_${member}_seed${seed}.jld2"
+    if [ -f "$file" ]; then echo "exists, skipped: $file"; return; fi
+    JULIA_CPU_THREADS=$threads julia -t $threads --project=. scripts/perezhogin_validation_run.jl \
+        $member $seed "$OUTDIR" $YEARS $SPINUP $C_R $LAT $NX_TRUTH $NX_COARSE $SNAPSHOT_DAYS $ALIASED_FRACTION \
+        > "$OUTDIR/logs/${member}_nx${nx}_seed${seed}.log" 2>&1
+}
+
+# 1) simulations, all in parallel
+for seed in $SEEDS; do
+    run truth    $NX_TRUTH  $TRUTH_THREADS $seed &
+    run none     $NX_COARSE 1              $seed &
+    run reynolds $NX_COARSE 1              $seed &
+done
+wait
+
+missing=0
+for seed in $SEEDS; do for m in "truth $NX_TRUTH" "none $NX_COARSE" "reynolds $NX_COARSE"; do
+    set -- $m
+    f="$OUTDIR/${LAT}N_nx${2}_${1}_seed${seed}.jld2"
+    [ -f "$f" ] || { echo "missing $f (see $OUTDIR/logs/${1}_nx${2}_seed${seed}.log)"; missing=1; }
+done; done
+[ $missing -eq 0 ] || echo "some runs failed; the analysis uses the runs that exist"
+
+# 2) spectra and energy transfers (model environment: needs the closure and the coarse-graining)
+JULIA_CPU_THREADS=8 julia -t 8 --project=. scripts/perezhogin_validation_spectra.jl "$OUTDIR" $NX_COARSE \
+    2>&1 | tee "$OUTDIR/logs/spectra.log" || { echo "spectra failed"; exit 1; }
+
+# 3) figure (plotting environment)
+julia --project=plotting scripts/plot_perezhogin_validation.jl "$OUTDIR" 2>&1 | tee "$OUTDIR/logs/plot.log"
+echo "done: $OUTDIR/perezhogin_validation.png"
 ```
 
 ---

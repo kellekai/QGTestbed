@@ -31,6 +31,16 @@ default_stepper(::AbstractClosure) = "FilteredRK4"
 has_prognostic_state(::AbstractClosure) = false
 
 """
+    closure_state(closure) / set_closure_state!(closure, state)
+
+The prognostic eddy-energy field (CPU array), stored by `run_simulation` next to every PV
+snapshot so the closure tendency can be recomputed offline (e.g. its spectral energy
+transfer). `nothing` for closures without prognostic state.
+"""
+closure_state(::AbstractClosure) = nothing
+set_closure_state!(::AbstractClosure, state) = nothing
+
+"""
     param_pv_flux(closure, f, m) -> (flux_layer1, flux_layer2)
 
 Domain-mean meridional PV flux carried by the closure (zero for closures

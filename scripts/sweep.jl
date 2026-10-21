@@ -5,8 +5,8 @@
 #
 # Sweep: latitudes × {truth, coarse grids × closures} × seeds.
 lats     = 20:10:70
-coarse   = (32, 64, 128)                 # 31, 15.6, 7.8 km for L = 1000 km
-closures = (:none, :nemo, :geometric, :geometric_nosplit, :meke, :reynolds)
+coarse   = Tuple(parse.(Int, split(get(ENV, "QG_GRIDS", "64"), ",")))   # QG_GRIDS=32,64,128 for all (31, 15.6, 7.8 km)
+closures = (:none, :nemo, :nemo_eorca025, :geometric, :geometric_nosplit, :geometric_eorca025, :meke, :reynolds)
 seeds    = 1:3                           # PG23 used 10 ensemble members
 years, spinup = 20, 5
 device = get(ENV, "QG_DEVICE", "cpu")   # set QG_DEVICE=gpu to run on CUDA

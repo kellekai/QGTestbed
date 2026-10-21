@@ -6,7 +6,8 @@
 # Eddy-induced advection: GM with a fixed, grid-scaled coefficient
 #     aei = (1/2) U_e L_e            (ldftra, nn_aei_ijk_t = 20, rn_Ue, rn_Le)
 #
-# Defaults: U_v = 0.1 m/s (as in Mak et al. 2023), U_e = 0.02 m/s,
+# Defaults: U_v = 0.1 m/s (NEMO 4 namelist_ref rn_Uv; Mak et al. 2023 used 0.5 in their
+# eddy-permitting runs, see geometric.jl), U_e = 0.02 m/s,
 # L_e = Δx. Set them to the values in your NEMO 4.0.7 namelist
 # (namdyn_ldf / namtra_eiv). Set `gm = false` if your 25 km
 # configuration runs without GM.
