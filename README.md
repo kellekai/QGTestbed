@@ -15,6 +15,10 @@ the ratio of grid spacing to deformation radius (Δx/Ld) changes with latitude.
 
 Every closure is judged against an eddy-resolving **truth** run at the same latitude.
 
+QGTestbed was developed by Kai Keller (Barcelona Supercomputing Center, Earth Sciences
+Department) in preparation for the REDDY project. If you use it, please cite this repository
+and the papers of the closures you run (see [References](#references)).
+
 ---
 
 ## 1. The model
@@ -256,7 +260,7 @@ All plotting uses the separate environment: `julia --project=plotting …` (run 
    differ from the paper by a constant factor while shapes and ratios stay comparable.
 
 9. **All closures in the same layout** (`scripts/closure_comparison.sh`): truth and, on 64², no
-   closure, Reynolds averaging (NEMO default with GM, and `nemo_eorca025`: our eORCA025 namelist a3ue,
+   closure, Reynolds averaging (NEMO default with GM, and `nemo_eorca025`: the namelist of our eORCA025 configuration,
    no GM, bilaplacian rn_Uv = 0.0838), Mak 2023, Jansen 2019 and Perezhogin 2023 (C_R = 7), as
    published, at 40°N by default (20 years, spin-up 8, 10 seeds, sweep numerics: no dealiasing,
    `QG_FILTER_ALL=true`). Panel (d) shows each closure's full energy transfer (GM, viscosity and
@@ -1108,10 +1112,35 @@ echo "done: $OUTDIR/perezhogin_validation.png"
 
 ---
 
+## Acknowledgements
+
+The closures are independent implementations of the published formulations. They were
+checked against the authors' own code where it is available, namely the MOM6 parameter files
+of Jansen et al. (2019), the NEMO 4.0.5 code of Mak et al. (2023), and the pyqg
+implementation of Perezhogin and Glazunov (2023). We thank the authors for making their code
+public. The simulations were run on MareNostrum 5 at the Barcelona Supercomputing Center.
+
+---
+
 ## References
 
-- Perezhogin, P. & Glazunov, A. (2023). Subgrid parameterizations of ocean mesoscale eddies based on Germano decomposition. JAMES. arXiv:2304.06789
-- Mak, J., Marshall, D. P., Madec, G. & Maddison, J. R. (2023). Scale-awareness in an eddy energy constrained mesoscale eddy parameterization. JAMES. arXiv:2306.08988
-- Jansen, M. F., Adcroft, A., Khani, S. & Kong, H. (2019). Toward an energetically consistent, resolution aware parameterization of ocean mesoscale eddies. JAMES.
-- Ross, A., Li, Z., Perezhogin, P., Fernandez-Granda, C. & Zanna, L. (2023). Benchmarking of machine learning ocean subgrid parameterizations in an idealized model. JAMES.
-- Constantinou, N. C. et al. (2021). GeophysicalFlows.jl: Solvers for geophysical fluid dynamics problems in periodic domains on CPUs & GPUs. JOSS 6(60), 3053.
+### Closures and configurations
+
+- Gent, P. R. & McWilliams, J. C. (1990). Isopycnal mixing in ocean circulation models. *J. Phys. Oceanogr.*, 20, 150–155. doi:10.1175/1520-0485(1990)020<0150:IMIOCM>2.0.CO;2
+- Hallberg, R. (2013). Using a resolution function to regulate parameterizations of oceanic mesoscale eddy effects. *Ocean Modelling*, 72, 92–103. doi:10.1016/j.ocemod.2013.08.007
+- Jansen, M. F. & Held, I. M. (2014). Parameterizing subgrid-scale eddy effects using energetically consistent backscatter. *Ocean Modelling*, 80, 36–48. doi:10.1016/j.ocemod.2014.06.002
+- Jansen, M. F., Adcroft, A., Khani, S. & Kong, H. (2019). Toward an energetically consistent, resolution aware parameterization of ocean mesoscale eddies. *J. Adv. Model. Earth Syst.*, 11, 2844–2860. doi:10.1029/2019MS001750
+- Mak, J., Maddison, J. R., Marshall, D. P. & Munday, D. R. (2018). Implementation of a geometrically informed and energetically constrained mesoscale eddy parameterization in an ocean circulation model. *J. Phys. Oceanogr.*, 48, 2363–2382. doi:10.1175/JPO-D-18-0017.1
+- Mak, J., Marshall, D. P., Madec, G. & Maddison, J. R. (2023). Scale-awareness in an eddy energy constrained mesoscale eddy parameterization. *J. Adv. Model. Earth Syst.*, 15, e2023MS003886. doi:10.1029/2023MS003886
+- Marshall, D. P., Maddison, J. R. & Berloff, P. S. (2012). A framework for parameterizing eddy potential vorticity fluxes. *J. Phys. Oceanogr.*, 42, 539–557. doi:10.1175/JPO-D-11-048.1
+- Perezhogin, P. & Glazunov, A. (2023). Subgrid parameterizations of ocean mesoscale eddies based on Germano decomposition. *J. Adv. Model. Earth Syst.*, 15, e2023MS003771. doi:10.1029/2023MS003771
+- Ross, A., Li, Z., Perezhogin, P., Fernandez-Granda, C. & Zanna, L. (2023). Benchmarking of machine learning ocean subgrid parameterizations in an idealized model. *J. Adv. Model. Earth Syst.*, 15, e2022MS003258. doi:10.1029/2022MS003258
+
+### Software
+
+- Constantinou, N. C., Wagner, G. L., Siegelman, L., Pearson, B. C. & Palóczy, A. (2021). GeophysicalFlows.jl: Solvers for geophysical fluid dynamics problems in periodic domains on CPUs & GPUs. *J. Open Source Softw.*, 6(60), 3053. doi:10.21105/joss.03053 ([github.com/FourierFlows/GeophysicalFlows.jl](https://github.com/FourierFlows/GeophysicalFlows.jl))
+- FourierFlows.jl, the spectral framework underlying GeophysicalFlows.jl ([github.com/FourierFlows/FourierFlows.jl](https://github.com/FourierFlows/FourierFlows.jl))
+- pyqg, the Python quasi-geostrophic model used for the validation ([github.com/pyqg/pyqg](https://github.com/pyqg/pyqg))
+- NEMO, the ocean model whose default closure and namelist parameters the `nemo` closures follow ([nemo-ocean.eu](https://www.nemo-ocean.eu))
+- MOM6, the ocean model whose MEKE implementation the `meke` closure follows ([github.com/mom-ocean/MOM6](https://github.com/mom-ocean/MOM6))
+- Jansen et al. (2019) MOM6 parameter files ([github.com/MFJansen/MEKE_GM_BS_parameters](https://github.com/MFJansen/MEKE_GM_BS_parameters))
