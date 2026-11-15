@@ -1110,6 +1110,10 @@ julia --project=plotting scripts/plot_perezhogin_validation.jl "$OUTDIR" 2>&1 | 
 echo "done: $OUTDIR/perezhogin_validation.png"
 ```
 
+## License
+
+QGTestbed is released under the MIT License (see LICENSE).
+
 ---
 
 ## Acknowledgements
