@@ -458,8 +458,8 @@ closure, was too dissipative in the gray zone. Without it, the testbed reproduce
 Perezhogin & Glazunov (2023, Fig. 10) at 64²: the KE spectra, the resolved KE and APE transfers and the
 subgrid transfer of the Reynolds closure agree with pyqg running the authors' own `Reynolds_stress`
 code within a few percent (ensemble scatter). The validation is reproducible with
-`scripts/perezhogin_validation.sh` (testbed) and the separate `pyqg-validation` package (pyqg, with
-`analyze_pyqg.py --testbed` overlaying both).
+`scripts/perezhogin_validation.sh` (testbed) and the `pyqg-validation` folder of this repository (pyqg,
+with `analyze_pyqg.py --testbed` overlaying both).
 
 The setting is read from the environment variable `QG_ALIASED_FRACTION` (default 0); all batch scripts
 export it and print it, and every output file stores `aliased_fraction` and `stepper`.
@@ -1112,7 +1112,9 @@ echo "done: $OUTDIR/perezhogin_validation.png"
 
 ## License
 
-QGTestbed is released under the MIT License (see LICENSE).
+QGTestbed is released under the MIT License (see LICENSE). One file is excluded:
+`pyqg-validation/parameterizations.py` is third-party code by Perezhogin & Glazunov, redistributed
+unchanged from their Zenodo record (doi:10.5281/zenodo.8277231) under the terms of that record.
 
 ---
 
@@ -1121,7 +1123,7 @@ QGTestbed is released under the MIT License (see LICENSE).
 The closures are independent implementations of the published formulations. They were
 checked against the authors' own code where it is available, namely the MOM6 parameter files
 of Jansen et al. (2019), the NEMO 4.0.5 code of Mak et al. (2023), and the pyqg
-implementation of Perezhogin and Glazunov (2023). We thank the authors for making their code
+implementation of Perezhogin and Glazunov (2023), which `pyqg-validation` uses unchanged. We thank the authors for making their code
 public. The simulations were run on MareNostrum 5 at the Barcelona Supercomputing Center.
 
 ---
@@ -1147,4 +1149,5 @@ public. The simulations were run on MareNostrum 5 at the Barcelona Supercomputin
 - pyqg, the Python quasi-geostrophic model used for the validation ([github.com/pyqg/pyqg](https://github.com/pyqg/pyqg))
 - NEMO, the ocean model whose default closure and namelist parameters the `nemo` closures follow ([nemo-ocean.eu](https://www.nemo-ocean.eu))
 - MOM6, the ocean model whose MEKE implementation the `meke` closure follows ([github.com/mom-ocean/MOM6](https://github.com/mom-ocean/MOM6))
+- Perezhogin, P. & Glazunov, A. (2023). Code and data for "Subgrid parameterizations of ocean mesoscale eddies based on Germano decomposition". Zenodo. doi:10.5281/zenodo.8277231 (source of `pyqg-validation/parameterizations.py`)
 - Jansen et al. (2019) MOM6 parameter files ([github.com/MFJansen/MEKE_GM_BS_parameters](https://github.com/MFJansen/MEKE_GM_BS_parameters))
