@@ -11,8 +11,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=112
 #SBATCH --time=02:00:00
-#SBATCH --account=ehpc01
-#SBATCH --qos=gp_debug
+#SBATCH --account=<your_account>
+#SBATCH --qos=<your_qos>
 #SBATCH --output=pyqg_validation_%j.out
 
 # ============================ settings ==========================================
@@ -26,7 +26,7 @@ NX_TRUTH=256
 NX_COARSE=64
 TRUTH_THREADS=4      # pyfftw threads per truth run (ignored without pyfftw)
 # Folder with the testbed's CSV curves to overlay (written by plot_perezhogin_validation.jl);
-# leave empty for none, e.g. TESTBED=../QGTestbed/perezhogin-validation/aliased_fraction_0
+# leave empty for none, e.g. TESTBED=../perezhogin-validation/aliased_fraction_0
 TESTBED=""
 # ================================================================================
 
