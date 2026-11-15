@@ -6,7 +6,7 @@
     make_closure(name::Symbol; kwargs...)
 
 `:none`, `:nemo`, `:nemo_eorca025`, `:geometric`, `:geometric_nosplit`, `:meke`, `:reynolds`.
-`:nemo_eorca025` is NEMO as in the project's eORCA025 runs (namelist a3ue): no GM
+`:nemo_eorca025` is NEMO as in the project's eORCA025 runs: no GM
 (ln_ldfeiv = .false.), bilaplacian momentum viscosity with nn_ahm_ijk_t = 20, rn_Uv = 0.0838 m/s.
 `:geometric_eorca025` is GEOMETRIC (Mak et al. 2023, with splitting) with that eORCA025 viscosity
 instead of the authors' rn_Uv = 0.5.
