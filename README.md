@@ -239,12 +239,12 @@ All plotting uses the separate environment: `julia --project=plotting …` (run 
    `meke_src_biharm`, `meke_sink_bs`, `meke_sink_drag`, `meke_net`, `meke_drag_rate`,
    `meke_drag_rate_Ubg` and `meke_Lmix` in `timeseries`.
 
-8. **Validation against Perezhogin & Glazunov (2023), Fig. 8.** The 49°N member is the pyqg
+8. **Validation against Perezhogin & Glazunov (2023), Fig. 10 (Fig. 8 in the preprint).** The 49°N member is the pyqg
    "eddy" configuration (Ross et al. 2023). One batch job runs the truth on 256², 64² without closure
    and 64² with the Reynolds backscatter at the published C_R = 7 (10 years, 5 seeds each), then
    computes the KE spectrum, the resolved KE and APE transfers and the subgrid energy transfer (closure,
    and the exact subgrid forcing of the coarse-grained truth with a Gaussian and a sharp filter), and
-   draws them in the layout of their Fig. 8:
+   draws them in the layout of their Fig. 10:
    ```bash
    sbatch scripts/perezhogin_validation.sh            # from the QGTestbed root folder
    ```
@@ -459,7 +459,8 @@ Perezhogin & Glazunov (2023, Fig. 10) at 64²: the KE spectra, the resolved KE a
 subgrid transfer of the Reynolds closure agree with pyqg running the authors' own `Reynolds_stress`
 code within a few percent (ensemble scatter). The validation is reproducible with
 `scripts/perezhogin_validation.sh` (testbed) and the `pyqg-validation` folder of this repository (pyqg,
-with `analyze_pyqg.py --testbed` overlaying both).
+with `analyze_pyqg.py --testbed` overlaying both). The overlay figure and its discussion are in
+[`pyqg-validation/README.md`](pyqg-validation/README.md#result-the-testbed-reproduces-pyqg).
 
 The setting is read from the environment variable `QG_ALIASED_FRACTION` (default 0); all batch scripts
 export it and print it, and every output file stores `aliased_fraction` and `stepper`.
@@ -603,7 +604,7 @@ scripts/scale_awareness.jl    metrics of every run vs truth, plotted against Ld/
 scripts/meke_budget.jl        energy budget of the MEKE closure (what sets K_GM)
 scripts/stability_check.jl    stability test of the closures without dealiasing (Section 7d)
 scripts/slurm/stability.sh    Slurm job: stability test (Section 7d)
-scripts/perezhogin_validation.sh         Slurm job: Perezhogin & Glazunov (2023) Fig. 8 validation at 49°N
+scripts/perezhogin_validation.sh         Slurm job: Perezhogin & Glazunov (2023) Fig. 10 validation at 49°N
 scripts/perezhogin_validation_run.jl     one run of that validation (truth / none / reynolds)
 scripts/perezhogin_validation_spectra.jl its spectra and energy transfers (model environment)
 scripts/plot_perezhogin_validation.jl    its figure (plotting environment)

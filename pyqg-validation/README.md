@@ -64,6 +64,28 @@ Spectra are normalized so that their sum times dk is the domain mean (k is the a
 If the paper used pyqg's own spectral normalization, absolute values may differ from its figure by a
 constant factor; shapes and the ratios between curves are comparable.
 
+## Result: the testbed reproduces pyqg
+
+![pyqg (dashed/solid) and QG testbed (dotted), eddy configuration, r_d = 15 km](pyqg_validation.png)
+
+*pyqg with the authors' `Reynolds_stress` code (solid and dashed) and the QG testbed (dotted), pyqg "eddy"
+configuration (r_d = 15 km): 64² without closure (grey), 64² with the Reynolds-stress closure, C_R = 7
+(purple), and the 256² truth (black). (a) KE spectrum, (b) resolved KE transfer, (c) resolved APE
+transfer, (d) subgrid KE+APE transfer of the closure, with the subgrid transfer of the coarse-grained
+truth for a Gaussian and a sharp filter (SGS Gauss, SGS Sharp). The vertical line marks the deformation
+wavenumber 1/r_d. Curves are means over all snapshots and seeds.*
+
+In all four panels the testbed curves lie on the pyqg curves, within a few percent. The largest
+difference, at the peak of the resolved KE transfer with the closure (b), is small compared with the
+gap between the coarse runs and the truth. This holds for the runs without a closure, so the base models agree (once the
+testbed runs without dealiasing, see Sect. 7d of the main README), and for the runs with the closure, so
+the testbed implementation of the Reynolds-stress closure reproduces the authors' own code. The closure
+also behaves as in Perezhogin & Glazunov (2023, Fig. 10): it moves the 64² KE spectrum and the resolved
+KE and APE transfers towards the 256² truth, and its subgrid transfer lies between the two filtered
+truth estimates (SGS Gauss and SGS Sharp), with backscatter at large scales and dissipation near the
+cutoff. In the terms of the decision list above, pyqg matches the paper and the testbed matches pyqg,
+so the testbed implementation of the closure is validated.
+
 ## License
 
 The scripts in this folder are part of QGTestbed and released under its MIT License
